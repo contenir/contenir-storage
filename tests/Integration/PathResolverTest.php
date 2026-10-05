@@ -13,9 +13,12 @@ use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
+use function array_map;
 use function file_get_contents;
+use function fileperms;
 use function mkdir;
 use function sprintf;
+use function umask;
 
 /**
  * PathResolver pins down a stable filename + path shape so consumers can
@@ -34,13 +37,15 @@ final class PathResolverTest extends TestCase
     public static function mimeExtensionProvider(): array
     {
         return [
-            'jpeg'             => ['image/jpeg', 'jpeg', 'jpg'],
-            'jpeg progressive' => ['image/pjpeg', 'jpg', 'jpg'],
-            'png'              => ['image/png', 'PNG', 'png'],
-            'png x-prefixed'   => ['image/x-png', 'png', 'png'],
-            'gif'              => ['image/gif', 'gif', 'gif'],
-            'webp'             => ['image/webp', 'webp', 'webp'],
-            'svg explicit xml' => ['image/svg+xml', 'svg', 'svg'],
+            'jpeg'             => ['image/jpeg', 'bin', 'jpg'],
+            'jpeg progressive' => ['image/pjpeg', 'bin', 'jpg'],
+            'png'              => ['image/png', 'bin', 'png'],
+            'png x-prefixed'   => ['image/x-png', 'bin', 'png'],
+            'gif'              => ['image/gif', 'bin', 'gif'],
+            'webp'             => ['image/webp', 'bin', 'webp'],
+            'svg explicit xml' => ['image/svg+xml', 'bin', 'svg'],
+            'svg short form'   => ['image/svg', 'bin', 'svg'],
+            'upper-case mime'  => ['IMAGE/PNG', 'bin', 'png'],
             'unknown mime'     => ['application/octet-stream', 'pdf', 'pdf'],
         ];
     }
@@ -107,6 +112,14 @@ final class PathResolverTest extends TestCase
     }
 
     #[Test]
+    public function resolveCreatesDestinationDirectoriesWithDefaultPermissions(): void
+    {
+        $this->resolver()->resolve(['path' => '/uploads/new', 'extension' => 'txt'], $this->writeFile('src.txt', 'x'));
+
+        static::assertSame(0o777 & ~umask(), fileperms("{$this->tmpDir}/uploads/new") & 0o777);
+    }
+
+    #[Test]
     public function resolveCreatesNestedDestinationDirectories(): void
     {
         $source = $this->writeFile('source.jpg', 'data');
@@ -140,6 +153,7 @@ final class PathResolverTest extends TestCase
         static::assertCount(1, $this->resizer->calls);
         static::assertSame(200, $this->resizer->calls[0]['width']);
         static::assertSame(200, $this->resizer->calls[0]['height']);
+        static::assertSame('STUB:200x200:Contain', file_get_contents("{$this->tmpDir}/uploads/hero.jpg"));
     }
 
     #[Test]
@@ -153,6 +167,18 @@ final class PathResolverTest extends TestCase
         );
 
         static::assertSame('/uploads/IMG_1234.original.jpg', $path);
+    }
+
+    #[Test]
+    public function resolveIgnoresATrailingSlashOnTheRoot(): void
+    {
+        (new PathResolver("{$this->tmpDir}/", $this->resizer))->resolve(
+            ['path' => '/uploads', 'width' => 200, 'height' => 200, 'mimeType' => 'image/jpeg'],
+            $this->writeFile('source.jpg', 'data'),
+            'hero',
+        );
+
+        static::assertSame("{$this->tmpDir}/uploads/hero.jpg", $this->resizer->calls[0]['dest']);
     }
 
     #[Test]
@@ -209,6 +235,21 @@ final class PathResolverTest extends TestCase
     }
 
     #[Test]
+    public function resolveResizesWhenOnlyTheWidthIsGiven(): void
+    {
+        $this->resolver()->resolve(
+            ['path' => '/uploads', 'width' => 200, 'mimeType' => 'image/jpeg'],
+            $this->writeFile('source.jpg', 'data'),
+            'hero',
+        );
+
+        static::assertSame([[200, 0]], array_map(
+            static fn(array $call): array => [$call['width'], $call['height']],
+            $this->resizer->calls,
+        ));
+    }
+
+    #[Test]
     public function resolveSkipsEmptyPathSegments(): void
     {
         $source = $this->writeFile('source.jpg', 'data');
@@ -232,6 +273,18 @@ final class PathResolverTest extends TestCase
             '/nonexistent/source.jpg',
             'hero',
         );
+    }
+
+    #[Test]
+    public function resolveTrimsSlashesAroundThePrefix(): void
+    {
+        $path = $this->resolver()->resolve(
+            ['path' => '/uploads/', 'prefix' => '/products/', 'extension' => 'jpg'],
+            $this->writeFile('source.jpg', 'data'),
+            'hero',
+        );
+
+        static::assertSame('/uploads/products/hero.jpg', $path);
     }
 
     #[Test]

@@ -24,11 +24,16 @@ final class VariantProfileTest extends TestCase
     public static function malformedConfigProvider(): array
     {
         return [
-            'no dimensions'      => [['fit' => 'cover'], 'non-empty "dimensions" ladder'],
-            'empty dimensions'   => [['dimensions' => []], 'non-empty "dimensions" ladder'],
-            'bad dimension form' => [['dimensions' => ['48Ox360']], 'must be <width>x<height>'],
-            'zero both axes'     => [['dimensions' => ['x']], 'at least one of width or height'],
-            'unknown fit'        => [['fit' => 'squish', 'dimensions' => ['10x10']], 'unknown fit "squish"'],
+            'no dimensions'                 => [['fit' => 'cover'], 'non-empty "dimensions" ladder'],
+            'empty dimensions'              => [['dimensions' => []], 'non-empty "dimensions" ladder'],
+            'bad dimension form'            => [['dimensions' => ['48Ox360']], 'must be <width>x<height>'],
+            'trailing garbage'              => [['dimensions' => ['480x360px']], 'must be <width>x<height>'],
+            'preview cover without a width' => [
+                ['role' => 'preview', 'fit' => 'cover', 'dimensions' => ['x300']],
+                'requires both a width and a height',
+            ],
+            'zero both axes'                => [['dimensions' => ['x']], 'at least one of width or height'],
+            'unknown fit'                   => [['fit' => 'squish', 'dimensions' => ['10x10']], 'unknown fit "squish"'],
         ];
     }
 
@@ -56,6 +61,23 @@ final class VariantProfileTest extends TestCase
         $this->expectExceptionMessage('requires both a width and a height');
 
         VariantProfile::fromArray('card', ['fit' => 'cover', 'dimensions' => ['480x']]);
+    }
+
+    #[Test]
+    public function declarationsAreNormalisedBeforeParsing(): void
+    {
+        $profile = VariantProfile::fromArray('card', [
+            'fit'        => 'Cover',
+            'quality'    => '70',
+            'formats'    => [' .AVIF ', 'WebP'],
+            'dimensions' => [' 320x240 '],
+        ]);
+        $variant = $profile->variants[0];
+
+        static::assertSame(
+            ['card-320', 320, 240, VariantFit::Cover, 70, ['avif', 'webp']],
+            [$variant->name, $variant->width, $variant->height, $variant->fit, $variant->quality, $variant->formats],
+        );
     }
 
     #[Test]

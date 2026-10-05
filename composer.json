@@ -9,6 +9,7 @@
         "psr/log": "^1.1 || ^2.0 || ^3.0"
     },
     "require-dev": {
+        "infection/infection": "^0.34.1",
         "league/flysystem-aws-s3-v3": "^3.29",
         "league/flysystem-memory": "^3.29",
         "league/mime-type-detection": "^1.16",
@@ -47,13 +48,17 @@
         "static-analysis": "mago analyze",
         "test": "phpunit --colors=always --testsuite unit",
         "test-integration": "phpunit --colors=always --testsuite integration",
-        "test-coverage": "phpunit --colors=always --coverage-clover clover.xml"
+        "test-coverage": "phpunit --colors=always --coverage-clover clover.xml",
+        "mutation-test": "infection"
     },
     "config": {
         "platform": {
             "php": "8.3.99"
         },
-        "sort-packages": true
+        "sort-packages": true,
+        "allow-plugins": {
+            "infection/extension-installer": true
+        }
     },
     "extra": {
         "branch-alias": {

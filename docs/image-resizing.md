@@ -20,7 +20,15 @@ $resizer = new ImageResizer(binaryPath: '/usr/bin/convert', useExtension: false)
 - `binaryPath()` reports the CLI in use. An empty `binaryPath` disables the
   CLI, so formats the extension cannot write fail with `WriteException`.
 - Without a `binaryPath`, the CLI is looked up with `which magick`, then
-  `which convert`, then a few common install paths.
+  `which convert`, then the install paths in `binaryCandidates`, in order.
+  These default to `ImageResizer::DEFAULT_BINARY_CANDIDATES`
+  (`/usr/local/bin/magick`, `/usr/bin/magick`, `/opt/homebrew/bin/magick`,
+  `/usr/local/bin/convert`, `/usr/bin/convert`); pass your own list for a
+  host that installs ImageMagick elsewhere:
+
+  ```php
+  $resizer = new ImageResizer(binaryCandidates: ['/opt/imagemagick/bin/magick']);
+  ```
 - Failures raise `WriteException`; invalid dimensions raise
   `InvalidArgumentException` (at least one dimension, and both for `Cover`
   and `Fill`).

@@ -31,10 +31,10 @@ final class LocalFilesystemResizeTest extends TestCase
     #[Test]
     public function deleteRemovesAllVariantsOnDisk(): void
     {
-        $source  = $this->writePng('source.png', 200, 200);
+        $source  = $this->writePng('source.png', 20, 20);
         $backend = $this->backend(new VariantRegistry(
-            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
-            new Variant('hero', 1200, 600, VariantFit::Cover),
+            new Variant('admin-thumb', 18, 18, VariantFit::Contain),
+            new Variant('hero', 120, 60, VariantFit::Cover),
         ));
 
         $backend->store(new UploadInput($source, 'photo.png', 'image/png'), 'gallery');
@@ -52,9 +52,9 @@ final class LocalFilesystemResizeTest extends TestCase
     #[Test]
     public function renameMovesAllVariantsOnDisk(): void
     {
-        $source  = $this->writePng('source.png', 200, 200);
+        $source  = $this->writePng('source.png', 20, 20);
         $backend = $this->backend(new VariantRegistry(
-            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
+            new Variant('admin-thumb', 18, 18, VariantFit::Contain),
         ));
 
         $backend->store(new UploadInput($source, 'photo.png', 'image/png'), 'gallery');
@@ -68,41 +68,41 @@ final class LocalFilesystemResizeTest extends TestCase
     #[Test]
     public function storeCoverFitProducesExactDimensions(): void
     {
-        $source  = $this->writePng('source.png', 800, 400);
+        $source  = $this->writePng('source.png', 80, 40);
         $backend = $this->backend(new VariantRegistry(
-            new Variant('square', 200, 200, VariantFit::Cover),
+            new Variant('square', 20, 20, VariantFit::Cover),
         ));
 
         $backend->store(new UploadInput($source, 'photo.png', 'image/png'), 'gallery');
 
         $info = getimagesize("{$this->tmpDir}/gallery/_variant/square/photo.png");
         static::assertIsArray($info);
-        static::assertSame(200, $info[0]);
-        static::assertSame(200, $info[1]);
+        static::assertSame(20, $info[0]);
+        static::assertSame(20, $info[1]);
     }
 
     #[Test]
     public function storeFillFitProducesExactDimensions(): void
     {
-        $source  = $this->writePng('source.png', 800, 600);
+        $source  = $this->writePng('source.png', 80, 60);
         $backend = $this->backend(new VariantRegistry(
-            new Variant('stretched', 100, 50, VariantFit::Fill),
+            new Variant('stretched', 10, 5, VariantFit::Fill),
         ));
 
         $backend->store(new UploadInput($source, 'photo.png', 'image/png'), 'gallery');
 
         $info = getimagesize("{$this->tmpDir}/gallery/_variant/stretched/photo.png");
         static::assertIsArray($info);
-        static::assertSame(100, $info[0]);
-        static::assertSame(50, $info[1]);
+        static::assertSame(10, $info[0]);
+        static::assertSame(5, $info[1]);
     }
 
     #[Test]
     public function storeGeneratesThumbVariantOnDisk(): void
     {
-        $source  = $this->writePng('source.png', 800, 600);
+        $source  = $this->writePng('source.png', 80, 60);
         $backend = $this->backend(new VariantRegistry(
-            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
+            new Variant('admin-thumb', 18, 18, VariantFit::Contain),
         ));
 
         $entry = $backend->store(new UploadInput($source, 'photo.png', 'image/png'), 'gallery');
@@ -113,8 +113,8 @@ final class LocalFilesystemResizeTest extends TestCase
 
         $variantInfo = getimagesize("{$this->tmpDir}/gallery/_variant/admin-thumb/photo.png");
         static::assertIsArray($variantInfo);
-        static::assertLessThanOrEqual(180, $variantInfo[0]);
-        static::assertLessThanOrEqual(180, $variantInfo[1]);
+        static::assertLessThanOrEqual(18, $variantInfo[0]);
+        static::assertLessThanOrEqual(18, $variantInfo[1]);
     }
 
     protected function setUp(): void

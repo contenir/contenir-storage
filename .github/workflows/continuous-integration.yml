@@ -13,3 +13,7 @@ jobs:
       run-integration: true
       enable-codecov: true
       coverage-php-version: "8.4"
+      apt-packages: "imagemagick"
+      enable-infection: true
+      min-msi: "100"
+      min-covered-msi: "100"

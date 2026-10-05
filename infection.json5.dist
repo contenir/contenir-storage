@@ -1,0 +1,109 @@
+{
+    "$schema": "vendor/infection/infection/resources/schema.json",
+    "source": {
+        "directories": ["src"]
+    },
+    "timeout": 10,
+    "threads": "max",
+    "logs": {
+        "text": "infection.log",
+        "summary": "summary.log",
+        "stryker": {
+            "badge": "/^(main|master)$/"
+        }
+    },
+    "mutators": {
+        "@default": true,
+        // VariantRegistry::get() throws the same InvalidArgumentException with the
+        // same message on the very next line, so dropping this `throw` changes nothing.
+        "Throw_": {
+            "ignore": [
+                "Contenir\\Storage\\Adapter\\CloudflareImages::variantUrls",
+                "Contenir\\Storage\\Adapter\\InMemoryStorage::variantUrls",
+                "Contenir\\Storage\\Adapter\\S3::variantUrls"
+            ]
+        },
+        "IncrementInteger": {
+            "ignoreSourceCodeByRegex": [
+                // usort() only reads the comparator's sign, so ±2 sorts exactly like ±1.
+                "\\$sign = SortDirection::Asc === \\$dir \\? 1 : -1;",
+                // The pattern's groups always participate in a match, so `?? 0` never applies.
+                "\\$width\\s+= \\(int\\) \\(\\$m\\[1\\] \\?\\? 0\\);",
+                "\\$height = \\(int\\) \\(\\$m\\[2\\] \\?\\? 0\\);"
+            ]
+        },
+        "DecrementInteger": {
+            "ignoreSourceCodeByRegex": [
+                // usort() only reads the comparator's sign, so ±2 sorts exactly like ±1.
+                "\\$sign = SortDirection::Asc === \\$dir \\? 1 : -1;",
+                // The pattern's groups always participate in a match, so `?? 0` never applies;
+                // $m[0] (the whole match) also starts with the width digits, so (int) reads the same.
+                "\\$width\\s+= \\(int\\) \\(\\$m\\[1\\] \\?\\? 0\\);",
+                "\\$height = \\(int\\) \\(\\$m\\[2\\] \\?\\? 0\\);",
+                // exec() always overwrites the exit code it is handed.
+                "\\$exit\\s+= 0;",
+                // ImageMagick sizes the unsharp kernel from sigma for any radius below
+                // MagickEpsilon, so -1 and 0 build the same kernel.
+                "radius: 0,"
+            ]
+        },
+        "Multiplication": {
+            "ignoreSourceCodeByRegex": [
+                // $sign is ±1 and $cmp an integer, so dividing yields the same integer.
+                "return \\$cmp \\* \\$sign;"
+            ]
+        },
+        "UnwrapFinally": {
+            // Both streams are locals of copySourceToTemp(), so PHP releases them as a failed
+            // copy's exception unwinds; the finally block only closes them a moment earlier.
+            "ignore": ["Contenir\\Storage\\Adapter\\S3::copySourceToTemp"]
+        },
+        "MethodCallRemoval": {
+            "ignoreSourceCodeByRegex": [
+                // Both handles are locals of copySourceToTemp(), so PHP closes them when it
+                // returns; the explicit close only makes that happen a few lines earlier.
+                "self::close\\(\\$(remote|local)\\);",
+                // Nothing in the Imagick pipeline pads, flattens or rotates, so the background
+                // colour is never read: extensionMatchesTheCliPipeline renders a translucent
+                // source byte-for-byte the same without it on ImageMagick 6 and 7.
+                "\\$image->setBackgroundColor\\(new ImagickPixel\\(color: 'transparent'\\)\\);",
+                // clear() only frees the wand's memory, which PHP releases when $image goes
+                // out of scope a line later; nothing written to disk depends on it.
+                "\\$image->clear\\(\\);"
+            ]
+        },
+        "ArrayItemRemoval": {
+            "ignoreSourceCodeByRegex": [
+                // The AWS SDK defaults the API version to "latest" when it is omitted.
+                "'version'\\s+=> 'latest',"
+            ]
+        },
+        "CastString": {
+            "ignoreSourceCodeByRegex": [
+                // Concatenation already converts the int width to the same string.
+                "\\$variantName = \\$name \\. '-' \\. \\(\\$width > 0 \\? \\(string\\) \\$width : \"x\\{\\$height\\}\"\\);"
+            ]
+        },
+        "TrueValue": {
+            "ignoreSourceCodeByRegex": [
+                // Only the key's presence is checked (array_key_exists), never its value.
+                "\\$seen\\[\\$variantName\\] = true;"
+            ]
+        },
+        "LogicalAnd": {
+            "ignoreSourceCodeByRegex": [
+                // `(!is_dir && !mkdir) || !is_dir` differs only if mkdir() succeeds yet the
+                // directory is missing straight after, which cannot happen.
+                "&& ! is_dir\\(\\$destDir\\)"
+            ]
+        },
+        "Coalesce": {
+            "ignoreSourceCodeByRegex": [
+                // The first pass already collapses every run of non-word characters (dashes
+                // included) into one dash, so the dash-collapsing pass never changes the value.
+                "\\) \\?\\? \\$value;"
+            ]
+        }
+    },
+    "staticAnalysisTool": "mago"
+}

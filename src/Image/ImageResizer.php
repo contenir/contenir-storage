@@ -26,7 +26,6 @@ use function is_readable;
 use function is_writable;
 use function mkdir;
 use function pathinfo;
-use function round;
 use function sprintf;
 use function strtoupper;
 
@@ -54,6 +53,20 @@ use const PATHINFO_EXTENSION;
  */
 final class ImageResizer implements ImageResizerInterface
 {
+    /**
+     * Install locations probed, in order, when neither `magick` nor `convert`
+     * is on the PATH.
+     *
+     * @var list<non-empty-string>
+     */
+    public const array DEFAULT_BINARY_CANDIDATES = [
+        '/usr/local/bin/magick',
+        '/usr/bin/magick',
+        '/opt/homebrew/bin/magick',
+        '/usr/local/bin/convert',
+        '/usr/bin/convert',
+    ];
+
     private readonly ?string $binaryPath;
 
     /** @var bool|null Explicit backend override for callers/tests; null defers to per-call format support. */
@@ -70,12 +83,19 @@ final class ImageResizer implements ImageResizerInterface
      *                                  the CLI-binary path (false) for every
      *                                  call. When null (the default), decided
      *                                  per call from real format support.
+     * @param list<non-empty-string>|null $binaryCandidates Install locations
+     *                                  probed, in order, when discovery finds
+     *                                  nothing on the PATH. Defaults to
+     *                                  {@see self::DEFAULT_BINARY_CANDIDATES}.
      */
-    public function __construct(?string $binaryPath = null, ?bool $useExtension = null)
-    {
+    public function __construct(
+        ?string $binaryPath = null,
+        ?bool $useExtension = null,
+        ?array $binaryCandidates = null,
+    ) {
         $this->forcedUseExtension = $useExtension;
         $this->binaryPath         = match ($binaryPath) {
-            null    => self::tryDiscoverBinary(),
+            null    => self::tryDiscoverBinary($binaryCandidates ?? self::DEFAULT_BINARY_CANDIDATES),
             ''      => null,
             default => $binaryPath,
         };
@@ -86,7 +106,10 @@ final class ImageResizer implements ImageResizerInterface
         return '' !== $format && in_array($format, (new Imagick())->queryFormats($format), strict: true);
     }
 
-    private static function tryDiscoverBinary(): ?string
+    /**
+     * @param list<non-empty-string> $candidates
+     */
+    private static function tryDiscoverBinary(array $candidates): ?string
     {
         foreach (['magick', 'convert'] as $binary) {
             $found = exec("which {$binary}");
@@ -95,13 +118,6 @@ final class ImageResizer implements ImageResizerInterface
             }
         }
 
-        $candidates = [
-            '/usr/local/bin/magick',
-            '/usr/bin/magick',
-            '/opt/homebrew/bin/magick',
-            '/usr/local/bin/convert',
-            '/usr/bin/convert',
-        ];
         foreach ($candidates as $candidate) {
             if (is_executable($candidate)) {
                 return $candidate;
@@ -218,20 +234,15 @@ final class ImageResizer implements ImageResizerInterface
     }
 
     /**
-     * Imagick::resizeImage() rejects 0 for either dimension, unlike the CLI's
-     * "Wx"/"xH" geometry strings — so when only one dimension is given, the
-     * missing one is derived from the source's own aspect ratio first.
+     * With both sides given, fit inside the box. With one side 0 (the CLI's
+     * "Wx"/"xH"), let Imagick derive the other from the source's aspect ratio:
+     * bestfit has to be off for that, as it rejects 0 — and deriving the side
+     * ourselves under bestfit re-derives the given side from the rounded one,
+     * which can land a pixel short of it.
      */
     private function resizeContain(Imagick $image, int $width, int $height): void
     {
-        if ($width <= 0 || $height <= 0) {
-            $sourceWidth  = $image->getImageWidth();
-            $sourceHeight = $image->getImageHeight();
-            $width        = $width > 0 ? $width : (int) round(($height * $sourceWidth) / $sourceHeight);
-            $height       = $height > 0 ? $height : (int) round(($width * $sourceHeight) / $sourceWidth);
-        }
-
-        $image->resizeImage($width, $height, Imagick::FILTER_LANCZOS, blur: 1, bestfit: true);
+        $image->resizeImage($width, $height, Imagick::FILTER_LANCZOS, blur: 1, bestfit: $width > 0 && $height > 0);
     }
 
     /**

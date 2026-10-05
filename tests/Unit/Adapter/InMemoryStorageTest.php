@@ -138,6 +138,12 @@ final class InMemoryStorageTest extends TestCase
     }
 
     #[Test]
+    public function listAtTheRootOfAnEmptyStoreReturnsNothing(): void
+    {
+        static::assertSame([], [...(new InMemoryStorage())->list('')]);
+    }
+
+    #[Test]
     public function listAtTheRootReturnsTopLevelEntriesOnly(): void
     {
         $storage = new InMemoryStorage();
@@ -200,6 +206,18 @@ final class InMemoryStorageTest extends TestCase
 
         sort($names);
         static::assertSame(['a.txt', 'sub'], $names);
+    }
+
+    #[Test]
+    public function listKeepsScanningPastEntriesStoredBeforeTheDirectChildren(): void
+    {
+        $storage = new InMemoryStorage();
+        $storage->putFile('other.txt', 'o');
+        $storage->makeDirectory('docs/sub');
+        $storage->putFile('docs/sub/deep.txt', 'd');
+        $storage->putFile('docs/a.txt', 'a');
+
+        static::assertSame(['a.txt'], array_map(static fn(Entry $e): string => $e->name, [...$storage->list('docs')]));
     }
 
     #[Test]

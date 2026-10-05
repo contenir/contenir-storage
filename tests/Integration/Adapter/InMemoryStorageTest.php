@@ -7,8 +7,10 @@ namespace Contenir\Storage\Tests\Integration\Adapter;
 use Contenir\Storage\Adapter\InMemoryStorage;
 use Contenir\Storage\Entry;
 use Contenir\Storage\Exception\WriteException;
+use Contenir\Storage\ResolvedUpload;
 use Contenir\Storage\Tests\Trait\TemporaryDirectoryTrait;
 use Contenir\Storage\UploadInput;
+use Contenir\Storage\UploadResolverInterface;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
@@ -56,6 +58,28 @@ final class InMemoryStorageTest extends TestCase
     }
 
     #[Test]
+    public function storeIgnoresATrailingSlashOnTheDirectory(): void
+    {
+        $source = $this->writeFile('hello.txt', 'hello');
+
+        $entry = (new InMemoryStorage())->store(new UploadInput($source, 'hello.txt'), 'docs/');
+
+        static::assertSame('docs/hello.txt', $entry->path);
+    }
+
+    #[Test]
+    public function storeNamesTheFileWithTheInjectedResolver(): void
+    {
+        $source   = $this->writeFile('hello.txt', 'hello');
+        $resolver = $this->createStub(UploadResolverInterface::class);
+        $resolver->method('resolve')->willReturn(new ResolvedUpload('renamed.txt', 'text/plain'));
+
+        $entry = (new InMemoryStorage(resolver: $resolver))->store(new UploadInput($source, 'hello.txt'), 'docs');
+
+        static::assertSame('docs/renamed.txt', $entry->path);
+    }
+
+    #[Test]
     public function storeReturnsEntryForUploadedFile(): void
     {
         $source  = $this->writeFile('hello.txt', 'hello world');
@@ -77,6 +101,7 @@ final class InMemoryStorageTest extends TestCase
         $storage = new InMemoryStorage();
 
         $this->expectException(WriteException::class);
+        $this->expectExceptionMessage('Cannot read upload source "/no/such/file".');
 
         $storage->store(new UploadInput('/no/such/file', 'foo.txt'), 'docs');
     }
