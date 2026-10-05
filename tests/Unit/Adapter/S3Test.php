@@ -4,910 +4,665 @@ declare(strict_types=1);
 
 namespace Contenir\Storage\Tests\Unit\Adapter;
 
-use InvalidArgumentException;
-use League\Flysystem\Filesystem;
-use League\Flysystem\InMemory\InMemoryFilesystemAdapter;
+use Contenir\Storage\Adapter\S3;
+use Contenir\Storage\Config\PathVariantResolver;
 use Contenir\Storage\Entry;
 use Contenir\Storage\Exception\NotFoundException;
 use Contenir\Storage\Exception\WriteException;
-use Contenir\Storage\ImageMeta;
+use Contenir\Storage\Image\ImageResizer;
 use Contenir\Storage\ListOptions;
 use Contenir\Storage\SortDirection;
 use Contenir\Storage\SortField;
-use Contenir\Storage\Adapter\S3;
-use Contenir\Storage\UploadInput;
+use Contenir\Storage\Tests\TestAsset\Flysystem\FailingFilesystem;
+use Contenir\Storage\Tests\TestAsset\Image\PngFactory;
 use Contenir\Storage\Variant;
 use Contenir\Storage\VariantFit;
-use Contenir\Storage\Config\PathVariantResolver;
 use Contenir\Storage\VariantRegistry;
-use Contenir\Storage\Image\StubImageResizer;
+use InvalidArgumentException;
+use League\Flysystem\DirectoryListing;
+use League\Flysystem\FileAttributes;
+use League\Flysystem\FilesystemOperator;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
+use function array_map;
+use function md5;
+use function sort;
+
+/**
+ * The bucket is an in-memory Flysystem (FailingFilesystem), so nothing here
+ * touches the network or the local disk. Flows that resize through temp files
+ * live in the integration suite.
+ */
 #[Group('unit')]
 #[Group('storage')]
 final class S3Test extends TestCase
 {
-    private string $tempDir;
-    private StubImageResizer $resizer;
+    private FailingFilesystem $fs;
 
-    protected function setUp(): void
+    /**
+     * @return array<string, array{string, string}>
+     */
+    public static function extensionMimeProvider(): array
     {
-        parent::setUp();
-        $this->tempDir = sys_get_temp_dir() . '/s3_test_' . uniqid('', true);
-        mkdir($this->tempDir, 0o777, true);
-        $this->resizer = new StubImageResizer();
+        return [
+            'jpg'     => ['a.jpg', 'image/jpeg'],
+            'jpeg'    => ['a.jpeg', 'image/jpeg'],
+            'png'     => ['a.png', 'image/png'],
+            'gif'     => ['a.gif', 'image/gif'],
+            'webp'    => ['a.webp', 'image/webp'],
+            'svg'     => ['a.svg', 'image/svg+xml'],
+            'avif'    => ['a.avif', 'image/avif'],
+            'mp3'     => ['a.mp3', 'audio/mpeg'],
+            'm4a'     => ['a.m4a', 'audio/mp4'],
+            'ogg'     => ['a.ogg', 'audio/ogg'],
+            'oga'     => ['a.oga', 'audio/ogg'],
+            'wav'     => ['a.wav', 'audio/wav'],
+            'mp4'     => ['a.mp4', 'video/mp4'],
+            'm4v'     => ['a.m4v', 'video/mp4'],
+            'mov'     => ['a.mov', 'video/quicktime'],
+            'webm'    => ['a.webm', 'video/webm'],
+            'pdf'     => ['a.pdf', 'application/pdf'],
+            'unknown' => ['a.xyz', 'application/octet-stream'],
+            'upper'   => ['A.PNG', 'image/png'],
+        ];
     }
 
-    protected function tearDown(): void
+    /**
+     * @return array<string, array{ListOptions, list<string>}>
+     */
+    public static function sortProvider(): array
     {
-        if (is_dir($this->tempDir)) {
-            foreach (glob($this->tempDir . '/*') ?: [] as $file) {
-                @unlink($file);
-            }
-            rmdir($this->tempDir);
-        }
-        parent::tearDown();
+        return [
+            'name ascending'  => [new ListOptions(), ['a.txt', 'b.pdf', 'c.png']],
+            'name descending' => [new ListOptions(sortDirection: SortDirection::Desc), ['c.png', 'b.pdf', 'a.txt']],
+            'size'            => [new ListOptions(sortField: SortField::Size), ['c.png', 'a.txt', 'b.pdf']],
+            'type'            => [new ListOptions(sortField: SortField::Type), ['a.txt', 'b.pdf', 'c.png']],
+        ];
     }
 
-    public function testStoreUploadsAndReturnsEntry(): void
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function unparseableVariantKeyProvider(): array
     {
-        $source  = $this->writeTempFile('hello.txt', 'data');
+        return [
+            'no extension'       => ['gallery/cat__thumb'],
+            'no separator'       => ['gallery/cat.png'],
+            'empty base'         => ['__thumb.png'],
+            'empty variant name' => ['gallery/cat__.png'],
+            'unknown variant'    => ['gallery/cat__nope.png'],
+            'unsupported format' => ['gallery/cat__thumb.tiff'],
+        ];
+    }
+
+    #[Test]
+    public function clearKeyCacheForcesExistenceToBeProbedAgain(): void
+    {
+        $this->fs->write('docs/a.txt', 'a');
         $backend = $this->backend();
+        [...$backend->list('docs')];
+        $this->fs->inner->delete('docs/a.txt');
 
-        $entry = $backend->store(new UploadInput($source, 'hello.txt', 'text/plain'), 'docs');
+        static::assertSame('https://cdn.test/docs/a.txt', $backend->url('docs/a.txt'));
 
-        self::assertInstanceOf(Entry::class, $entry);
-        self::assertSame('hello.txt', $entry->name);
-        self::assertSame('docs/hello.txt', $entry->path);
-        self::assertSame(md5('hello.txt'), $entry->id);
+        $backend->clearKeyCache();
+
+        static::assertNull($backend->url('docs/a.txt'));
     }
 
-    public function testStoreDerivesNameAndExtensionFromDetectedType(): void
+    #[Test]
+    public function deleteManyRemovesExactlyTheKeysGiven(): void
     {
-        $source  = $this->writePngFile('test.bin', 10, 10);
-        $backend = $this->backend();
+        $this->fs->write('junk/a.png', 'a');
+        $this->fs->write('junk/a__card.png', 'v');
+        $this->fs->write('keep/c.png', 'c');
 
-        // Misleading .JPEG name + image/jpeg header; the detected PNG bytes win
-        // and the human part is slugged to hyphens.
-        $entry = $backend->store(new UploadInput($source, 'IMG_1234.JPEG', 'image/jpeg'), 'docs');
+        $failed = $this->backend($this->variants(new Variant('card', 600, 600)))->deleteMany([
+            'junk/a.png',
+            '/keep/c.png',
+        ]);
 
-        self::assertSame('img-1234.png', $entry->name);
+        static::assertSame([], $failed);
+        static::assertSame(['junk/a__card.png'], $this->keys());
     }
 
-    public function testStoreResolvesCollisionWithSuffix(): void
+    #[Test]
+    public function deleteManyReportsEachKeyThatCouldNotBeRemoved(): void
     {
-        $source  = $this->writeTempFile('a.txt', 'data');
-        $backend = $this->backend();
+        $this->fs->write('a.png', 'a');
+        $this->fs->write('b.png', 'b');
+        $this->fs->failOn('delete', 'a.png');
 
-        $first  = $backend->store(new UploadInput($source, 'note.txt'), 'docs');
-        $second = $backend->store(new UploadInput($source, 'note.txt'), 'docs');
+        $failed = $this->backend()->deleteMany(['a.png', 'b.png']);
 
-        self::assertSame('note.txt', $first->name);
-        self::assertSame('note_1.txt', $second->name);
+        static::assertSame(['a.png' => 'Unable to delete file located at: a.png. delete refused'], $failed);
+        static::assertSame(['a.png'], $this->keys());
     }
 
-    public function testStoreThrowsWhenSourceUnreadable(): void
+    #[Test]
+    public function deleteManyTreatsAnAbsentKeyAsAlreadySatisfied(): void
     {
-        $backend = $this->backend();
-
-        $this->expectException(WriteException::class);
-
-        $backend->store(new UploadInput('/no/such/file', 'a.txt'), 'docs');
+        static::assertSame([], $this->backend()->deleteMany(['never/existed.png']));
     }
 
-    public function testStoreGeneratesSiblingVariantsForImages(): void
-    {
-        $source  = $this->writePngFile('cat.png', 30, 30);
-        $backend = $this->backend(new VariantRegistry(
-            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
-        ));
-
-        $entry = $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
-
-        self::assertCount(1, $this->resizer->calls);
-        self::assertSame('gallery/cat.png', $entry->path);
-        // Variant lives at sibling key
-        self::assertNotNull($backend->url($entry->path, 'admin-thumb'));
-    }
-
-    public function testStoreSkipsVariantsForImagesWhenAutoGenerateIsOn(): void
-    {
-        $source  = $this->writePngFile('cat.png', 30, 30);
-        $backend = $this->backend(
-            new VariantRegistry(new Variant('admin-thumb', 180, 180, VariantFit::Contain)),
-            autoGenerate: true,
-        );
-
-        $entry = $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
-
-        self::assertSame([], $this->resizer->calls);
-        self::assertSame('gallery/cat.png', $entry->path);
-        self::assertNull($backend->url($entry->path, 'admin-thumb'));
-    }
-
-    public function testStoreSkipsVariantsForNonImages(): void
-    {
-        $source  = $this->writeTempFile('notes.txt', 'data');
-        $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
-
-        $backend->store(new UploadInput($source, 'notes.txt', 'text/plain'), 'docs');
-
-        self::assertSame([], $this->resizer->calls);
-    }
-
-    public function testUrlReturnsPublicUrlForExistingFile(): void
-    {
-        $source  = $this->writeTempFile('a.txt', 'data');
-        $backend = $this->backend(publicUrlBase: 'https://cdn.example.com');
-        $backend->store(new UploadInput($source, 'a.txt'), 'docs');
-
-        self::assertSame('https://cdn.example.com/docs/a.txt', $backend->url('docs/a.txt'));
-    }
-
-    public function testUrlReturnsNullForMissingFile(): void
-    {
-        self::assertNull($this->backend()->url('nope.txt'));
-    }
-
-    public function testUrlReturnsVariantUrlWhenMaterialised(): void
-    {
-        $source  = $this->writePngFile('a.png', 10, 10);
-        $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
-        $backend->store(new UploadInput($source, 'a.png', 'image/png'), 'docs');
-
-        self::assertStringContainsString('docs/a__admin-thumb.png', $backend->url('docs/a.png', 'admin-thumb'));
-    }
-
-    public function testUrlReturnsNullWhenVariantNotMaterialised(): void
-    {
-        $source  = $this->writeTempFile('notes.txt', 'data');
-        $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
-        $backend->store(new UploadInput($source, 'notes.txt', 'text/plain'), 'docs');
-
-        self::assertNull($backend->url('docs/notes.txt', 'admin-thumb'));
-    }
-
-    public function testVariantUrlsAreDeterministicWithoutExistenceCheck(): void
-    {
-        // No store() call: the variant (and the original) do NOT exist in the
-        // bucket. variantUrls() must still return the derived URL — it trusts
-        // the key and never issues a HEAD — whereas url() returns null because
-        // it does probe. This is the contract the CMS render path relies on.
-        $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
-
-        self::assertNull($backend->url('docs/ghost.png', 'admin-thumb'));
-        self::assertSame(
-            ['source' => 'https://cdn.test/docs/ghost__admin-thumb.png'],
-            $backend->variantUrls('docs/ghost.png', 'admin-thumb'),
-        );
-    }
-
-    public function testVariantUrlsThrowsForUnknownVariant(): void
-    {
-        $this->expectException(InvalidArgumentException::class);
-
-        $this->backend()->variantUrls('docs/a.png', 'no-such-variant');
-    }
-
-    public function testStorePopulatesImageDimensionsAsProvenance(): void
-    {
-        $source  = $this->writePngFile('a.png', 42, 24);
-        $backend = $this->backend();
-
-        $entry = $backend->store(new UploadInput($source, 'a.png', 'image/png'), 'docs');
-
-        self::assertInstanceOf(ImageMeta::class, $entry->image);
-        self::assertSame(42, $entry->image->width);
-        self::assertSame(24, $entry->image->height);
-    }
-
-    public function testStoreLeavesImageNullForNonImages(): void
-    {
-        $source  = $this->writeTempFile('notes.txt', 'just some plain text');
-        $backend = $this->backend();
-
-        $entry = $backend->store(new UploadInput($source, 'notes.txt'), 'docs');
-
-        self::assertNull($entry->image);
-    }
-
-    public function testUrlThrowsForUnknownVariant(): void
-    {
-        $source  = $this->writeTempFile('a.txt', 'plain text body');
-        $backend = $this->backend();
-        $backend->store(new UploadInput($source, 'a.txt'), 'docs');
-
-        $this->expectException(InvalidArgumentException::class);
-
-        $backend->url('docs/a.txt', 'no-such-variant');
-    }
-
-    public function testListReturnsFilesAndExcludesVariantSiblings(): void
-    {
-        $source  = $this->writePngFile('a.png', 10, 10);
-        $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
-        $backend->store(new UploadInput($source, 'a.png', 'image/png'), 'docs');
-        $backend->store(new UploadInput($source, 'b.png', 'image/png'), 'docs');
-
-        $entries = iterator_to_array($this->iter($backend->list('docs')));
-        $names   = array_map(static fn (Entry $e): string => $e->name, $entries);
-        sort($names);
-
-        self::assertSame(['a.png', 'b.png'], $names);
-    }
-
-    public function testUrlsForKeyReturnsOriginalPlusEveryDeclaredVariant(): void
-    {
-        $backend = $this->backend(new VariantRegistry(
-            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
-            new Variant('w480', 480, 480, VariantFit::Contain),
-            new Variant('w960', 960, 960, VariantFit::Contain),
-        ));
-
-        $urls = $backend->urlsForKey('docs/logo.png');
-
-        self::assertSame([
-            'https://cdn.test/docs/logo.png',
-            'https://cdn.test/docs/logo__admin-thumb.png',
-            'https://cdn.test/docs/logo__w480.png',
-            'https://cdn.test/docs/logo__w960.png',
-        ], $urls);
-    }
-
-    public function testUrlsForKeyDoesNotCheckExistence(): void
-    {
-        // Key isn't stored, but urlsForKey should still return URLs — it's
-        // for cache invalidation where we want every URL that COULD have
-        // been cached, not just the ones currently materialised.
-        $backend = $this->backend(new VariantRegistry(
-            new Variant('thumb', 180, 180, VariantFit::Contain),
-        ));
-
-        $urls = $backend->urlsForKey('not/yet/stored.png');
-
-        self::assertSame([
-            'https://cdn.test/not/yet/stored.png',
-            'https://cdn.test/not/yet/stored__thumb.png',
-        ], $urls);
-    }
-
-    public function testListInfersMimeFromExtensionWhenAdapterReportsNone(): void
-    {
-        $source  = $this->writePngFile('logo.png', 10, 10);
-        $backend = $this->backend();
-        $backend->store(new UploadInput($source, 'logo.png', 'image/png'), 'docs');
-
-        // InMemoryFilesystemAdapter returns null mimeType in listings — same
-        // shape as S3's ListObjectsV2 — so the entry's mime must come from
-        // the extension fallback for isImage() to be correct.
-        $entries = iterator_to_array($this->iter($backend->list('docs')));
-
-        self::assertCount(1, $entries);
-        self::assertSame('image/png', $entries[0]->mime);
-        self::assertTrue($entries[0]->isImage());
-    }
-
-    public function testListFiltersByKeyword(): void
-    {
-        $source  = $this->writeTempFile('a.txt', 'plain text body');
-        $backend = $this->backend();
-        $backend->store(new UploadInput($source, 'report.txt'), 'docs');
-        $backend->store(new UploadInput($source, 'notes.txt'), 'docs');
-
-        $entries = iterator_to_array($this->iter(
-            $backend->list('docs', new ListOptions(keyword: 'report')),
-        ));
-
-        self::assertCount(1, $entries);
-        self::assertSame('report.txt', $entries[0]->name);
-    }
-
-    public function testListSortsByNameDescending(): void
-    {
-        $source  = $this->writeTempFile('a.txt', 'plain text body');
-        $backend = $this->backend();
-        $backend->store(new UploadInput($source, 'apple.txt'), 'docs');
-        $backend->store(new UploadInput($source, 'zebra.txt'), 'docs');
-
-        $entries = iterator_to_array($this->iter(
-            $backend->list('docs', new ListOptions(sortDirection: SortDirection::Desc)),
-        ));
-        $names = array_map(static fn (Entry $e): string => $e->name, $entries);
-
-        self::assertSame(['zebra.txt', 'apple.txt'], $names);
-    }
-
-    public function testListSortsBySize(): void
-    {
-        $big    = $this->writeTempFile('big.txt', str_repeat('a', 100));
-        $small  = $this->writeTempFile('small.txt', 'abc');
-
-        $backend = $this->backend();
-        $backend->store(new UploadInput($big, 'big.txt'), 'docs');
-        $backend->store(new UploadInput($small, 'small.txt'), 'docs');
-
-        $entries = iterator_to_array($this->iter(
-            $backend->list('docs', new ListOptions(sortField: SortField::Size)),
-        ));
-        $names = array_map(static fn (Entry $e): string => $e->name, $entries);
-
-        self::assertSame(['small.txt', 'big.txt'], $names);
-    }
-
-    public function testExistsTrueForStoredFile(): void
-    {
-        $source  = $this->writeTempFile('a.txt', 'plain text body');
-        $backend = $this->backend();
-        $backend->store(new UploadInput($source, 'a.txt'), 'docs');
-
-        self::assertTrue($backend->exists('docs/a.txt'));
-    }
-
-    public function testExistsFalseForMissingFile(): void
-    {
-        self::assertFalse($this->backend()->exists('nope.txt'));
-    }
-
-    public function testDeleteRemovesFileAndVariants(): void
-    {
-        $source  = $this->writePngFile('a.png', 10, 10);
-        $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
-        $backend->store(new UploadInput($source, 'a.png', 'image/png'), 'docs');
-
-        self::assertTrue($backend->exists('docs/a.png'));
-        self::assertTrue($backend->exists('docs/a__admin-thumb.png'));
-
-        $backend->delete('docs/a.png');
-
-        self::assertFalse($backend->exists('docs/a.png'));
-        self::assertFalse($backend->exists('docs/a__admin-thumb.png'));
-    }
-
-    public function testDeleteThrowsForMissingFile(): void
+    #[Test]
+    public function deleteRejectsAMissingObject(): void
     {
         $this->expectException(NotFoundException::class);
 
         $this->backend()->delete('nope.txt');
     }
 
-    public function testRenameMovesFileAndVariants(): void
+    #[Test]
+    public function deleteRemovesTheObjectAndEveryVariantSibling(): void
     {
-        $source  = $this->writePngFile('a.png', 10, 10);
-        $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
-        $backend->store(new UploadInput($source, 'a.png', 'image/png'), 'docs');
+        $this->fs->write('docs/a.png', 'a');
+        $this->fs->write('docs/a__thumb.png', 't');
+        $this->fs->write('docs/a__card.avif', 'c');
+        $this->fs->write('docs/a__card.png', 'c');
+        $this->fs->write('docs/b.png', 'b');
 
-        $backend->rename('docs/a.png', 'docs/renamed.png');
+        $this->backend($this->variants(
+            new Variant('thumb', 10, 10),
+            new Variant('card', 20, 20, formats: ['avif']),
+        ))->delete('docs/a.png');
 
-        self::assertFalse($backend->exists('docs/a.png'));
-        self::assertTrue($backend->exists('docs/renamed.png'));
-        self::assertFalse($backend->exists('docs/a__admin-thumb.png'));
-        self::assertTrue($backend->exists('docs/renamed__admin-thumb.png'));
+        static::assertSame(['docs/b.png'], $this->keys());
     }
 
-    public function testRenameThrowsWhenSourceMissing(): void
+    #[Test]
+    public function deleteReportsAnObjectThatCannotBeRemoved(): void
     {
-        $this->expectException(NotFoundException::class);
-
-        $this->backend()->rename('nope.txt', 'somewhere.txt');
-    }
-
-    public function testRenameThrowsWhenDestinationExists(): void
-    {
-        $source  = $this->writeTempFile('a.txt', 'plain text body');
-        $backend = $this->backend();
-        $backend->store(new UploadInput($source, 'a.txt'), 'docs');
-        $backend->store(new UploadInput($source, 'b.txt'), 'docs');
+        $this->fs->write('a.png', 'a');
+        $this->fs->failOn('delete', 'a.png');
 
         $this->expectException(WriteException::class);
-
-        $backend->rename('docs/a.txt', 'docs/b.txt');
+        $this->expectExceptionMessage('Failed deleting "a.png"');
+        $this->backend()->delete('a.png');
     }
 
-    public function testImageMetaReturnsDimensionsForRealImage(): void
+    #[Test]
+    public function deleteToleratesAVariantThatCannotBeRemoved(): void
     {
-        $source  = $this->writePngFile('a.png', 50, 30);
-        $backend = $this->backend();
-        $backend->store(new UploadInput($source, 'a.png', 'image/png'), 'docs');
+        $this->fs->write('a.png', 'a');
+        $this->fs->write('a__thumb.png', 't');
+        $this->fs->failOn('delete', 'a__thumb.png');
 
-        $meta = $backend->imageMeta('docs/a.png');
+        $this->backend($this->variants(new Variant('thumb', 10, 10)))->delete('a.png');
 
-        self::assertSame(50, $meta->width);
-        self::assertSame(30, $meta->height);
-        self::assertSame('image/png', $meta->mime);
+        static::assertSame(['a__thumb.png'], $this->keys());
     }
 
-    public function testImageMetaThrowsForMissingFile(): void
+    #[Test]
+    public function existsReflectsTheBucket(): void
+    {
+        $this->fs->write('docs/a.txt', 'a');
+        $backend = $this->backend();
+
+        static::assertTrue($backend->exists('\\docs\\a.txt'));
+        static::assertFalse($backend->exists('docs/b.txt'));
+    }
+
+    #[Test]
+    public function generateForKeyDeclinesAFamilyTheOriginalDoesNotOwn(): void
+    {
+        $this->fs->write('news/cat.png', PngFactory::bytes(4, 4));
+        $backend = $this->backend(
+            $this->variants(new Variant('gallery-480', 480, 0, VariantFit::Contain)),
+            new PathVariantResolver(['/gallery' => ['gallery']]),
+        );
+
+        static::assertNull($backend->generateForKey('news/cat__gallery-480.png'));
+    }
+
+    #[Test]
+    #[DataProvider('unparseableVariantKeyProvider')]
+    public function generateForKeyDeclinesKeysItCannotGenerate(string $key): void
+    {
+        $this->fs->write('gallery/cat.png', PngFactory::bytes(4, 4));
+
+        static::assertNull($this->backend($this->variants(new Variant('thumb', 2, 2)))->generateForKey($key));
+    }
+
+    #[Test]
+    public function generateForKeyDeclinesWhenNoOriginalExists(): void
+    {
+        $backend = $this->backend($this->variants(new Variant('thumb', 2, 2)));
+
+        static::assertNull($backend->generateForKey('gallery/ghost__thumb.png'));
+    }
+
+    #[Test]
+    public function generateForKeyReturnsAnExistingVariantWithoutResizing(): void
+    {
+        $this->fs->write('gallery/cat.png', 'x');
+        $this->fs->write('gallery/cat__thumb.webp', 'v');
+
+        $url = $this->backend($this->variants(new Variant('thumb', 2, 2)))->generateForKey('gallery/cat__thumb.WEBP');
+
+        static::assertSame('https://cdn.test/gallery/cat__thumb.WEBP', $url);
+    }
+
+    #[Test]
+    public function imageMetaReadsDimensionsFromTheObjectBytes(): void
+    {
+        $this->fs->write('a.png', PngFactory::bytes(7, 3));
+
+        $meta = $this->backend()->imageMeta('a.png');
+
+        static::assertSame([7, 3, 'image/png'], [$meta->width, $meta->height, $meta->mime]);
+    }
+
+    #[Test]
+    public function imageMetaRejectsAMissingObject(): void
     {
         $this->expectException(NotFoundException::class);
 
         $this->backend()->imageMeta('nope.png');
     }
 
-    public function testImageMetaThrowsForNonImage(): void
+    #[Test]
+    public function imageMetaRejectsAnObjectThatCannotBeRead(): void
     {
-        $source  = $this->writeTempFile('notes.txt', 'data');
-        $backend = $this->backend();
-        $backend->store(new UploadInput($source, 'notes.txt', 'text/plain'), 'docs');
+        $this->fs->write('a.png', PngFactory::bytes(1, 1));
+        $this->fs->failOn('read', 'a.png');
 
         $this->expectException(NotFoundException::class);
-
-        $backend->imageMeta('docs/notes.txt');
+        $this->backend()->imageMeta('a.png');
     }
 
-    public function testRegenerateMissingVariantsCreatesAbsentSiblings(): void
+    #[Test]
+    public function imageMetaRejectsAnObjectThatIsNotAnImage(): void
     {
-        $source  = $this->writePngFile('cat.png', 30, 30);
-        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
-        $backend = new S3(
-            fs:            $fs,
-            publicUrlBase: 'https://cdn.test',
-            variants:      new VariantRegistry(
-                new Variant('admin-thumb', 180, 180, VariantFit::Contain),
-            ),
-            resizer:       $this->resizer,
-        );
-
-        $entry = $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
-        $fs->delete('gallery/cat__admin-thumb.png');
-        $this->resizer->calls = [];
-
-        $regenerated = $backend->regenerateMissingVariants($entry->path);
-
-        self::assertSame(['gallery/cat__admin-thumb.png'], $regenerated);
-        self::assertCount(1, $this->resizer->calls);
-        self::assertTrue($fs->fileExists('gallery/cat__admin-thumb.png'));
-    }
-
-    public function testRegenerateMissingVariantsIsIdempotentWhenEverythingPresent(): void
-    {
-        $source  = $this->writePngFile('cat.png', 30, 30);
-        $backend = $this->backend(new VariantRegistry(
-            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
-        ));
-
-        $entry = $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
-        $this->resizer->calls = [];
-
-        $regenerated = $backend->regenerateMissingVariants($entry->path);
-
-        self::assertSame([], $regenerated);
-        self::assertSame([], $this->resizer->calls, 'No resizer calls expected when nothing is missing.');
-    }
-
-    public function testRegenerateMissingVariantsThrowsWhenSourceMissing(): void
-    {
-        $backend = $this->backend(new VariantRegistry(new Variant('admin-thumb', 180, 180)));
+        $this->fs->write('a.txt', 'text');
 
         $this->expectException(NotFoundException::class);
-        $backend->regenerateMissingVariants('gallery/does-not-exist.png');
+        $this->backend()->imageMeta('a.txt');
     }
 
-    public function testRegenerateMissingVariantsGeneratesAllDeclaredFormats(): void
+    #[Test]
+    public function listFiltersByKeyword(): void
     {
-        $source  = $this->writePngFile('hero.png', 30, 30);
-        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
-        $backend = new S3(
-            fs:            $fs,
-            publicUrlBase: 'https://cdn.test',
-            variants:      new VariantRegistry(
-                new Variant('hero', 1600, 1200, VariantFit::Cover, ['avif', 'webp'], 80),
-            ),
-            resizer:       $this->resizer,
-        );
+        $this->fs->write('docs/report.pdf', 'r');
+        $this->fs->write('docs/notes.txt', 'n');
 
-        $entry = $backend->store(new UploadInput($source, 'hero.png', 'image/png'), 'covers');
-        $fs->delete('covers/hero__hero.avif');
-        $fs->delete('covers/hero__hero.webp');
-        $this->resizer->calls = [];
-
-        $regenerated = $backend->regenerateMissingVariants($entry->path);
-
-        sort($regenerated);
-        self::assertSame(['covers/hero__hero.avif', 'covers/hero__hero.webp'], $regenerated);
-        self::assertCount(2, $this->resizer->calls);
-        self::assertTrue($fs->fileExists('covers/hero__hero.avif'));
-        self::assertTrue($fs->fileExists('covers/hero__hero.webp'));
-    }
-
-    public function testRegenerateMissingVariantsStreamsSourceFromBackend(): void
-    {
-        // Sanity check that the new streaming path materialises the same
-        // local temp file content the legacy slurping path produced. A
-        // bespoke ImageResizer subclass captures the bytes the resizer
-        // was actually fed (we can't query the regenerator's temp file
-        // after the fact — its finally block unlinks it on return).
-        $source      = $this->writePngFile('cat.png', 30, 30);
-        $sourceBytes = (string) file_get_contents($source);
-        $fs          = new Filesystem(new InMemoryFilesystemAdapter());
-
-        $captureResizer = new class () extends \Contenir\Storage\Image\ImageResizer {
-            public ?string $capturedBytes = null;
-            public function __construct()
-            {
-                $this->binaryPath = '/dev/null';
-            }
-            public function resize(
-                string $sourcePath,
-                string $destPath,
-                int $width,
-                int $height,
-                VariantFit $fit = VariantFit::Cover,
-                ?int $quality = null,
-            ): void {
-                $this->capturedBytes = (string) file_get_contents($sourcePath);
-                $dir = \dirname($destPath);
-                if (! is_dir($dir)) {
-                    mkdir($dir, 0o777, true);
-                }
-                file_put_contents($destPath, 'STUB');
-            }
-        };
-
-        $backend = new S3(
-            fs:            $fs,
-            publicUrlBase: 'https://cdn.test',
-            variants:      new VariantRegistry(
-                new Variant('admin-thumb', 180, 180, VariantFit::Contain),
-            ),
-            resizer:       $captureResizer,
-        );
-
-        $entry = $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
-        $fs->delete('gallery/cat__admin-thumb.png');
-        $captureResizer->capturedBytes = null;
-
-        $backend->regenerateMissingVariants($entry->path);
-
-        self::assertSame(
-            $sourceBytes,
-            $captureResizer->capturedBytes,
-            'Streaming download must reproduce source bytes exactly.',
+        static::assertSame(
+            ['report.pdf'],
+            $this->names($this->backend()->list('docs', new ListOptions(keyword: 'REP'))),
         );
     }
 
-    public function testClearKeyCacheForcesReExistenceProbes(): void
+    #[Test]
+    public function listHidesDotFilesVariantSiblingsAndDirectoriesByDefault(): void
     {
-        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
-        $backend = new S3(
-            fs:            $fs,
-            publicUrlBase: 'https://cdn.test',
-            variants:      new VariantRegistry(),
-            resizer:       $this->resizer,
-        );
+        $this->fs->write('docs/a.png', 'a');
+        $this->fs->write('docs/a__thumb.png', 't');
+        $this->fs->write('docs/b__other.png', 'b');
+        $this->fs->write('docs/.hidden', 'h');
+        $this->fs->createDirectory('docs/sub');
 
-        // Warm the cache by listing the prefix containing a known object.
-        $source = $this->writeTempFile('hello.txt', 'data');
-        $backend->store(new UploadInput($source, 'hello.txt', 'text/plain'), 'docs');
-        iterator_to_array($this->iter($backend->list('docs')));
-        self::assertNotNull($backend->url('docs/hello.txt'));
+        $names = $this->names($this->backend($this->variants(new Variant('thumb', 1, 1)))->list('/docs/'));
 
-        // Manually nuke the object from the underlying fs (bypassing
-        // delete() so the cache isn't invalidated as a side effect).
-        $fs->delete('docs/hello.txt');
-
-        // Cache says the key exists even though it doesn't (this is the
-        // bug clearKeyCache exists to mitigate in long-running workers).
-        self::assertNotNull($backend->url('docs/hello.txt'));
-
-        $backend->clearKeyCache();
-
-        // After clearing, url() falls through to a real fileExists() and
-        // correctly reports the gone object.
-        self::assertNull($backend->url('docs/hello.txt'));
+        static::assertSame(['a.png', 'b__other.png'], $names);
     }
 
-    public function testGenerateForKeyMaterialisesMissingVariant(): void
+    #[Test]
+    public function listIncludesDirectoriesWhenAsked(): void
     {
-        $source  = $this->writePngFile('cat.png', 30, 30);
-        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
-        $backend = new S3(
-            fs:            $fs,
-            publicUrlBase: 'https://cdn.test',
-            variants:      new VariantRegistry(
-                new Variant('admin-thumb', 180, 180, VariantFit::Contain),
-            ),
-            resizer:       $this->resizer,
-        );
+        $this->fs->createDirectory('docs/sub');
 
-        $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
-        $fs->delete('gallery/cat__admin-thumb.png');
-        $this->resizer->calls = [];
+        $entries = [...$this->backend()->list('docs', new ListOptions(includeDirectories: true))];
 
-        $url = $backend->generateForKey('gallery/cat__admin-thumb.png');
-
-        self::assertSame('https://cdn.test/gallery/cat__admin-thumb.png', $url);
-        self::assertCount(1, $this->resizer->calls);
-        self::assertTrue($fs->fileExists('gallery/cat__admin-thumb.png'));
+        static::assertCount(1, $entries);
+        static::assertSame(['sub', true, 0, 'inode/directory'], [
+            $entries[0]->name,
+            $entries[0]->isDir,
+            $entries[0]->size,
+            $entries[0]->mime,
+        ]);
     }
 
-    public function testGenerateForKeyReturnsExistingVariantWithoutResizing(): void
+    #[Test]
+    #[DataProvider('extensionMimeProvider')]
+    public function listInfersTheMimeTypeFromTheExtension(string $name, string $mime): void
     {
-        $source  = $this->writePngFile('cat.png', 30, 30);
-        $backend = $this->backend(new VariantRegistry(
-            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
-        ));
-        $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
-        $this->resizer->calls = [];
+        $this->fs->write("docs/{$name}", 'x');
 
-        $url = $backend->generateForKey('gallery/cat__admin-thumb.png');
+        $entries = [...$this->backend()->list('docs')];
 
-        self::assertSame('https://cdn.test/gallery/cat__admin-thumb.png', $url);
-        self::assertSame([], $this->resizer->calls, 'An already-present variant must not be regenerated.');
+        static::assertSame($mime, $entries[0]->mime);
     }
 
-    public function testGenerateForKeyGeneratesOnlyTheRequestedFormat(): void
+    #[Test]
+    public function listPrefersTheMimeTypeTheBucketReports(): void
     {
-        $source  = $this->writePngFile('hero.png', 30, 30);
-        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
-        $backend = new S3(
-            fs:            $fs,
-            publicUrlBase: 'https://cdn.test',
-            variants:      new VariantRegistry(
-                new Variant('hero', 1600, 1200, VariantFit::Cover, ['avif', 'webp'], 80),
-            ),
-            resizer:       $this->resizer,
-        );
-        $backend->store(new UploadInput($source, 'hero.png', 'image/png'), 'covers');
-        $fs->delete('covers/hero__hero.avif');
-        $fs->delete('covers/hero__hero.webp');
-        $this->resizer->calls = [];
+        $this->fs->write('docs/a.png', 'plain text');
+        $this->fs->listsMimeTypes = true;
 
-        $url = $backend->generateForKey('covers/hero__hero.avif');
-
-        self::assertSame('https://cdn.test/covers/hero__hero.avif', $url);
-        self::assertCount(1, $this->resizer->calls, 'Only the requested format should be generated.');
-        self::assertTrue($fs->fileExists('covers/hero__hero.avif'));
-        self::assertFalse($fs->fileExists('covers/hero__hero.webp'));
+        static::assertSame('text/plain', [...$this->backend()->list('docs')][0]->mime);
     }
 
-    public function testGenerateForKeyReturnsNullForUnknownVariant(): void
+    #[Test]
+    public function listRejectsAPrefixThatCannotBeListed(): void
     {
-        $source  = $this->writePngFile('cat.png', 30, 30);
-        $backend = $this->backend(new VariantRegistry(
-            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
-        ));
-        $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
-        $this->resizer->calls = [];
+        $this->fs->failOn('listContents', 'docs');
 
-        self::assertNull($backend->generateForKey('gallery/cat__no-such.png'));
-        self::assertSame([], $this->resizer->calls);
+        $this->expectException(NotFoundException::class);
+        [...$this->backend()->list('docs')];
     }
 
-    public function testGenerateForKeyReturnsNullForNonVariantKey(): void
+    #[Test]
+    public function listReportsSizeAndModificationTime(): void
     {
-        self::assertNull($this->backend()->generateForKey('gallery/cat.png'));
+        $this->fs->write('docs/a.txt', 'abc');
+
+        $entry = [...$this->backend()->list('docs')][0];
+
+        static::assertSame(3, $entry->size);
+        static::assertSame($this->fs->lastModified('docs/a.txt'), $entry->mtime->getTimestamp());
+        static::assertSame(md5('a.txt'), $entry->id);
     }
 
-    public function testGenerateForKeyReturnsNullWhenOriginalMissing(): void
+    #[Test]
+    public function listSortsByModificationTime(): void
     {
-        $backend = $this->backend(new VariantRegistry(
-            new Variant('admin-thumb', 180, 180, VariantFit::Contain),
-        ));
+        $fs = $this->createStub(FilesystemOperator::class);
+        $fs->method('listContents')->willReturn(new DirectoryListing([
+            new FileAttributes('docs/b.pdf', 1, null, 200),
+            new FileAttributes('docs/a.txt', 1, null, 100),
+            new FileAttributes('docs/c.png', 1, null, 300),
+        ]));
+        $backend = new S3($fs, 'https://cdn.test', new VariantRegistry(), $this->createStub(ImageResizer::class));
 
-        self::assertNull($backend->generateForKey('gallery/ghost__admin-thumb.png'));
-    }
-
-    public function testGenerateForKeyReturnsNullForUnsupportedOutputFormat(): void
-    {
-        $source  = $this->writePngFile('hero.png', 30, 30);
-        $backend = $this->backend(new VariantRegistry(
-            new Variant('hero', 1600, 1200, VariantFit::Cover, ['avif', 'webp'], 80),
-        ));
-        $backend->store(new UploadInput($source, 'hero.png', 'image/png'), 'covers');
-        $this->resizer->calls = [];
-
-        // .tiff is not a web-deliverable raster output the resizer will emit.
-        self::assertNull($backend->generateForKey('covers/hero__hero.tiff'));
-        self::assertSame([], $this->resizer->calls);
-    }
-
-    public function testGenerateForKeyProducesAnyRequestedFormatRegardlessOfDeclaredFormats(): void
-    {
-        // Mirrors the local on-demand resizer: the variant supplies only
-        // dimensions/fit; the format comes from the requested key's extension,
-        // so the <img> source-ext fallback and avif/webp <source>s all resolve.
-        $source  = $this->writePngFile('cat.png', 30, 30);
-        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
-        $backend = new S3(
-            fs:            $fs,
-            publicUrlBase: 'https://cdn.test',
-            variants:      new VariantRegistry(
-                new Variant('card', 600, 600, VariantFit::Cover, ['avif', 'webp'], 75),
-            ),
-            resizer:       $this->resizer,
-        );
-        $backend->store(new UploadInput($source, 'cat.png', 'image/png'), 'gallery');
-        $this->resizer->calls = [];
-
-        // The source-ext sibling the <img> fallback resolves against is
-        // materialised at store time alongside the declared avif/webp.
-        self::assertTrue($fs->fileExists('gallery/cat__card.png'));
-
-        // A format that is neither declared nor the source is still produced
-        // on demand from the original.
-        $url = $backend->generateForKey('gallery/cat__card.jpg');
-
-        self::assertSame('https://cdn.test/gallery/cat__card.jpg', $url);
-        self::assertCount(1, $this->resizer->calls);
-        self::assertTrue($fs->fileExists('gallery/cat__card.jpg'));
-    }
-
-
-    public function testStoreOnlyMaterialisesTheFamiliesThePathOwns(): void
-    {
-        $source  = $this->writePngFile('owned.png', 30, 30);
-        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
-        $backend = new S3(
-            fs:            $fs,
-            publicUrlBase: 'https://cdn.test',
-            variants:      new VariantRegistry(
-                new Variant('tile-480', 480, 480, VariantFit::Contain),
-                new Variant('mark-240', 240, 240, VariantFit::Contain),
-            ),
-            resizer:       $this->resizer,
-            paths:         new PathVariantResolver(['/gallery' => ['tile']]),
-        );
-
-        $backend->store(new UploadInput($source, 'owned.png', 'image/png'), 'gallery');
-
-        self::assertTrue($fs->fileExists('gallery/owned__tile-480.png'));
-        self::assertFalse($fs->fileExists('gallery/owned__mark-240.png'));
-    }
-
-    public function testGenerateForKeyDeclinesAFamilyThePathDoesNotOwn(): void
-    {
-        // The edge miss-proxy must not be a way around the ownership map.
-        $source  = $this->writePngFile('guarded.png', 30, 30);
-        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
-        $backend = new S3(
-            fs:            $fs,
-            publicUrlBase: 'https://cdn.test',
-            variants:      new VariantRegistry(
-                new Variant('tile-480', 480, 480, VariantFit::Contain),
-                new Variant('mark-240', 240, 240, VariantFit::Contain),
-            ),
-            resizer:       $this->resizer,
-            paths:         new PathVariantResolver(['/gallery' => ['tile']]),
-        );
-        $backend->store(new UploadInput($source, 'guarded.png', 'image/png'), 'gallery');
-
-        self::assertNull($backend->generateForKey('gallery/guarded__mark-240.png'));
-        self::assertFalse($fs->fileExists('gallery/guarded__mark-240.png'));
-    }
-
-    public function testDeleteStillRemovesSiblingsOfFamiliesThePathNoLongerOwns(): void
-    {
-        // Cleanup must stay exhaustive: siblings written before an ownership
-        // change would otherwise be stranded in the bucket forever.
-        $source  = $this->writePngFile('stale.png', 30, 30);
-        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
-        $variants = new VariantRegistry(
-            new Variant('tile-480', 480, 480, VariantFit::Contain),
-            new Variant('mark-240', 240, 240, VariantFit::Contain),
-        );
-
-        $permissive = new S3(
-            fs:            $fs,
-            publicUrlBase: 'https://cdn.test',
-            variants:      $variants,
-            resizer:       $this->resizer,
-        );
-        $permissive->store(new UploadInput($source, 'stale.png', 'image/png'), 'gallery');
-        self::assertTrue($fs->fileExists('gallery/stale__mark-240.png'));
-
-        $restricted = new S3(
-            fs:            $fs,
-            publicUrlBase: 'https://cdn.test',
-            variants:      $variants,
-            resizer:       $this->resizer,
-            paths:         new PathVariantResolver(['/gallery' => ['tile']]),
-        );
-        $restricted->delete('gallery/stale.png');
-
-        self::assertFalse($fs->fileExists('gallery/stale__mark-240.png'));
-    }
-
-
-    public function testMissingVariantsReportsWhatABackfillWouldProduceWithoutWriting(): void
-    {
-        $source  = $this->writePngFile('audit.png', 30, 30);
-        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
-        $backend = new S3(
-            fs:            $fs,
-            publicUrlBase: 'https://cdn.test',
-            variants:      new VariantRegistry(new Variant('card', 600, 600, VariantFit::Contain, ['avif'])),
-            resizer:       $this->resizer,
-        );
-        $fs->write('gallery/audit.png', (string) file_get_contents($source));
-        $this->resizer->calls = [];
-
-        $missing = $backend->missingVariants('gallery/audit.png');
-
-        self::assertSame(['gallery/audit__card.avif', 'gallery/audit__card.png'], $missing);
-        self::assertSame([], $this->resizer->calls);
-        self::assertFalse($fs->fileExists('gallery/audit__card.avif'));
-    }
-
-    public function testMissingVariantsIsEmptyOnceEverythingIsMaterialised(): void
-    {
-        $source  = $this->writePngFile('full.png', 30, 30);
-        $backend = $this->backend(new VariantRegistry(new Variant('card', 600, 600, VariantFit::Contain, ['avif'])));
-        $backend->store(new UploadInput($source, 'full.png', 'image/png'), 'gallery');
-
-        self::assertSame([], $backend->missingVariants('gallery/full.png'));
-    }
-
-
-    public function testDeleteManyRemovesExactlyTheKeysGiven(): void
-    {
-        // delete() would also sweep every registered variant sibling; a vetted
-        // key list must not trigger that.
-        $fs      = new Filesystem(new InMemoryFilesystemAdapter());
-        $backend = new S3(
-            fs:            $fs,
-            publicUrlBase: 'https://cdn.test',
-            variants:      new VariantRegistry(new Variant('card', 600, 600)),
-            resizer:       $this->resizer,
-        );
-        $fs->write('junk/a.png', 'a');
-        $fs->write('junk/b.png', 'b');
-        $fs->write('keep/c.png', 'c');
-
-        $failed = $backend->deleteMany(['junk/a.png', 'junk/b.png']);
-
-        self::assertSame([], $failed);
-        self::assertFalse($fs->fileExists('junk/a.png'));
-        self::assertFalse($fs->fileExists('junk/b.png'));
-        self::assertTrue($fs->fileExists('keep/c.png'));
-    }
-
-    public function testDeleteManyTreatsAnAbsentKeyAsAlreadySatisfied(): void
-    {
-        $backend = $this->backend();
-
-        self::assertSame([], $backend->deleteMany(['never/existed.png']));
-    }
-
-    private function backend(
-        ?VariantRegistry $variants = null,
-        string $publicUrlBase = 'https://cdn.test',
-        bool $autoGenerate = false,
-    ): S3 {
-        $fs = new Filesystem(new InMemoryFilesystemAdapter());
-        return new S3(
-            fs:            $fs,
-            publicUrlBase: $publicUrlBase,
-            variants:      $variants ?? new VariantRegistry(),
-            resizer:       $this->resizer,
-            autoGenerate:  $autoGenerate,
+        static::assertSame(
+            ['c.png', 'b.pdf', 'a.txt'],
+            $this->names($backend->list('docs', new ListOptions(
+                sortField: SortField::Time,
+                sortDirection: SortDirection::Desc,
+            ))),
         );
     }
 
     /**
-     * @param iterable<Entry> $iterable
-     * @return \Generator<int, Entry>
+     * @param list<string> $expected
      */
-    private function iter(iterable $iterable): \Generator
+    #[Test]
+    #[DataProvider('sortProvider')]
+    public function listSortsByTheRequestedField(ListOptions $options, array $expected): void
     {
-        foreach ($iterable as $key => $value) {
-            yield $key => $value;
-        }
+        $this->fs->write('docs/b.pdf', 'bbb');
+        $this->fs->write('docs/a.txt', 'aa');
+        $this->fs->write('docs/c.png', 'c');
+
+        static::assertSame($expected, $this->names($this->backend()->list('docs', $options)));
     }
 
-    private function writeTempFile(string $name, string $contents): string
+    #[Test]
+    public function listTreatsAnEmptyKeywordAsNoFilter(): void
     {
-        $path = $this->tempDir . '/' . $name;
-        file_put_contents($path, $contents);
-        return $path;
+        $this->fs->write('docs/a.txt', 'a');
+
+        static::assertSame(['a.txt'], $this->names($this->backend()->list('docs', new ListOptions(keyword: ''))));
     }
 
-    private function writePngFile(string $name, int $width, int $height): string
+    #[Test]
+    public function missingVariantsListsUnmaterialisedSiblingsWithoutWriting(): void
     {
-        $path = $this->tempDir . '/' . $name;
-        $img  = imagecreatetruecolor($width, $height);
-        imagepng($img, $path);
-        imagedestroy($img);
-        return $path;
+        $this->fs->write('gallery/cat.png', 'x');
+        $this->fs->write('gallery/cat__thumb.png', 't');
+
+        $missing = $this->backend($this->variants(
+            new Variant('thumb', 1, 1),
+            new Variant('card', 2, 2, formats: ['avif']),
+        ))->missingVariants('gallery/cat.png');
+
+        static::assertSame(['gallery/cat__card.avif', 'gallery/cat__card.png'], $missing);
+        static::assertCount(2, $this->keys());
+    }
+
+    #[Test]
+    public function missingVariantsRejectsAMissingOriginal(): void
+    {
+        $this->expectException(NotFoundException::class);
+
+        $this->backend()->missingVariants('nope.png');
+    }
+
+    #[Test]
+    public function regenerateMissingVariantsIsANoOpWhenEverythingExists(): void
+    {
+        $this->fs->write('gallery/cat.png', 'x');
+        $this->fs->write('gallery/cat__thumb.png', 't');
+
+        static::assertSame(
+            [],
+            $this->backend($this->variants(new Variant('thumb', 1, 1)))->regenerateMissingVariants('gallery/cat.png'),
+        );
+    }
+
+    #[Test]
+    public function regenerateMissingVariantsRejectsAMissingOriginal(): void
+    {
+        $this->expectException(NotFoundException::class);
+
+        $this->backend()->regenerateMissingVariants('gallery/does-not-exist.png');
+    }
+
+    #[Test]
+    public function renameLeavesAVariantBehindWhenItCannotBeMoved(): void
+    {
+        $this->fs->write('a.png', 'a');
+        $this->fs->write('a__thumb.png', 't');
+        $this->fs->failOn('move', 'a__thumb.png');
+
+        $this->backend($this->variants(new Variant('thumb', 1, 1)))->rename('a.png', 'b.png');
+
+        static::assertSame(['a__thumb.png', 'b.png'], $this->keys());
+    }
+
+    #[Test]
+    public function renameMovesTheObjectAndItsVariantSiblings(): void
+    {
+        $this->fs->write('a.png', 'a');
+        $this->fs->write('a__thumb.png', 't');
+        $backend = $this->backend($this->variants(new Variant('thumb', 1, 1), new Variant('card', 2, 2)));
+
+        $backend->rename('a.png', 'b.png');
+
+        static::assertSame(['b.png', 'b__thumb.png'], $this->keys());
+        static::assertSame('https://cdn.test/b__thumb.png', $backend->url('b.png', 'thumb'));
+    }
+
+    #[Test]
+    public function renameRefusesToOverwriteAnExistingObject(): void
+    {
+        $this->fs->write('a.png', 'a');
+        $this->fs->write('b.png', 'b');
+
+        $this->expectException(WriteException::class);
+        $this->expectExceptionMessage('Destination "b.png" already exists.');
+        $this->backend()->rename('a.png', 'b.png');
+    }
+
+    #[Test]
+    public function renameRejectsAMissingSource(): void
+    {
+        $this->expectException(NotFoundException::class);
+
+        $this->backend()->rename('nope.txt', 'somewhere.txt');
+    }
+
+    #[Test]
+    public function renameReportsAMoveFailure(): void
+    {
+        $this->fs->write('a.png', 'a');
+        $this->fs->failOn('move', 'a.png');
+
+        $this->expectException(WriteException::class);
+        $this->expectExceptionMessage('Failed renaming "a.png" to "b.png"');
+        $this->backend()->rename('a.png', 'b.png');
+    }
+
+    #[Test]
+    public function renameSkipsAVariantWhoseExistenceCannotBeChecked(): void
+    {
+        $this->fs->write('a.png', 'a');
+        $this->fs->failOn('fileExists', 'a__thumb.png');
+
+        $this->backend($this->variants(new Variant('thumb', 1, 1)))->rename('a.png', 'b.png');
+
+        static::assertSame(['b.png'], $this->keys());
+    }
+
+    #[Test]
+    public function urlRejectsAnUnknownVariant(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->backend()->url('a.png', 'nope');
+    }
+
+    #[Test]
+    public function urlReturnsNullForAMissingObject(): void
+    {
+        static::assertNull($this->backend()->url('nope.txt'));
+    }
+
+    #[Test]
+    public function urlReturnsNullForAVariantThatIsNotMaterialised(): void
+    {
+        $this->fs->write('a.png', 'a');
+
+        static::assertNull($this->backend($this->variants(new Variant('thumb', 1, 1)))->url('a.png', 'thumb'));
+    }
+
+    #[Test]
+    public function urlReturnsTheFirstDeclaredFormatOfAMaterialisedVariant(): void
+    {
+        $this->fs->write('a.png', 'a');
+        $this->fs->write('a__card.avif', 'v');
+
+        static::assertSame(
+            'https://cdn.test/a__card.avif',
+            $this->backend($this->variants(new Variant('card', 1, 1, formats: ['avif', 'webp'])))->url('a.png', 'card'),
+        );
+    }
+
+    #[Test]
+    public function urlReturnsThePublicUrlOfAnExistingObject(): void
+    {
+        $this->fs->write('docs/a.txt', 'a');
+
+        static::assertSame(
+            'https://cdn.test/docs/a.txt',
+            $this->backend(publicUrlBase: 'https://cdn.test/')->url('/docs/a.txt'),
+        );
+    }
+
+    #[Test]
+    public function urlsForKeyKeepsAnExtensionlessKeyExtensionless(): void
+    {
+        static::assertSame(
+            ['https://cdn.test/docs/logo', 'https://cdn.test/docs/logo__thumb'],
+            $this->backend($this->variants(new Variant('thumb', 1, 1)))->urlsForKey('docs/logo'),
+        );
+    }
+
+    #[Test]
+    public function urlsForKeyReturnsTheOriginalAndEveryDeclaredSiblingWithoutChecking(): void
+    {
+        $urls = $this->backend($this->variants(
+            new Variant('thumb', 1, 1),
+            new Variant('card', 2, 2, formats: ['avif']),
+        ))->urlsForKey('docs/logo.png');
+
+        static::assertSame(
+            [
+                'https://cdn.test/docs/logo.png',
+                'https://cdn.test/docs/logo__thumb.png',
+                'https://cdn.test/docs/logo__card.avif',
+                'https://cdn.test/docs/logo__card.png',
+            ],
+            $urls,
+        );
+    }
+
+    #[Test]
+    public function variantUrlsAreKeyedByFormatWithoutCheckingExistence(): void
+    {
+        static::assertSame(
+            [
+                'avif'   => 'https://cdn.test/docs/ghost__card.avif',
+                'source' => 'https://cdn.test/docs/ghost__card.png',
+            ],
+            $this->backend($this->variants(new Variant('card', 1, 1, formats: ['avif'])))->variantUrls(
+                'docs/ghost.png',
+                'card',
+            ),
+        );
+    }
+
+    #[Test]
+    public function variantUrlsRejectAnUnknownVariant(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->backend()->variantUrls('docs/a.png', 'no-such-variant');
+    }
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->fs = new FailingFilesystem();
+    }
+
+    private function backend(
+        ?VariantRegistry $variants = null,
+        ?PathVariantResolver $paths = null,
+        string $publicUrlBase = 'https://cdn.test',
+    ): S3 {
+        return new S3(
+            fs: $this->fs,
+            publicUrlBase: $publicUrlBase,
+            variants: $variants ?? new VariantRegistry(),
+            resizer: $this->createStub(ImageResizer::class),
+            paths: $paths,
+        );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function keys(): array
+    {
+        $keys = array_map(
+            static fn($attributes): string => $attributes->path(),
+            $this->fs
+                ->inner
+                ->listContents('', deep: true)
+                ->filter(static fn($attributes): bool => $attributes->isFile())
+                ->toArray(),
+        );
+        sort($keys);
+
+        return $keys;
+    }
+
+    /**
+     * @param iterable<Entry> $entries
+     *
+     * @return list<string>
+     */
+    private function names(iterable $entries): array
+    {
+        return array_map(static fn(Entry $entry): string => $entry->name, [...$entries]);
+    }
+
+    private function variants(Variant ...$variants): VariantRegistry
+    {
+        return new VariantRegistry(...$variants);
     }
 }

@@ -12,6 +12,8 @@ namespace Contenir\Storage;
  * edge/origin request for a not-yet-generated variant can trigger a single
  * resize-and-store. Backends that resolve variants through a URL transform, or
  * that have no sibling-object scheme, simply do not implement this interface.
+ *
+ * @api
  */
 interface OnDemandVariantGeneratorInterface
 {

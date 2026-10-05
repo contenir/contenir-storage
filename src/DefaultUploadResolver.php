@@ -6,11 +6,12 @@ namespace Contenir\Storage;
 
 use Contenir\Storage\Exception\InvalidPathException;
 use Contenir\Storage\Exception\UnsupportedTypeException;
+use Contenir\Storage\Internal\Warnings;
+use Override;
 
 use function finfo_file;
 use function finfo_open;
 use function getimagesize;
-use function is_array;
 use function is_readable;
 use function pathinfo;
 use function preg_replace;
@@ -37,21 +38,21 @@ final class DefaultUploadResolver implements UploadResolverInterface
      *
      * @var array<string, string>
      */
-    private const DEFAULT_EXTENSION_MAP = [
+    private const array DEFAULT_EXTENSION_MAP = [
         // Images
-        'image/jpeg'                                                                => 'jpg',
-        'image/pjpeg'                                                               => 'jpg',
-        'image/png'                                                                 => 'png',
-        'image/x-png'                                                               => 'png',
-        'image/gif'                                                                 => 'gif',
-        'image/webp'                                                                => 'webp',
-        'image/avif'                                                                => 'avif',
-        'image/bmp'                                                                 => 'bmp',
-        'image/x-ms-bmp'                                                            => 'bmp',
-        'image/tiff'                                                                => 'tiff',
-        'image/svg+xml'                                                             => 'svg',
-        'image/x-icon'                                                              => 'ico',
-        'image/heic'                                                                => 'heic',
+        'image/jpeg'     => 'jpg',
+        'image/pjpeg'    => 'jpg',
+        'image/png'      => 'png',
+        'image/x-png'    => 'png',
+        'image/gif'      => 'gif',
+        'image/webp'     => 'webp',
+        'image/avif'     => 'avif',
+        'image/bmp'      => 'bmp',
+        'image/x-ms-bmp' => 'bmp',
+        'image/tiff'     => 'tiff',
+        'image/svg+xml'  => 'svg',
+        'image/x-icon'   => 'ico',
+        'image/heic'     => 'heic',
         // Documents
         'application/pdf'                                                           => 'pdf',
         'application/msword'                                                        => 'doc',
@@ -73,26 +74,26 @@ final class DefaultUploadResolver implements UploadResolverInterface
         'application/xml'                                                           => 'xml',
         'application/json'                                                          => 'json',
         // Archives
-        'application/zip'                                                           => 'zip',
-        'application/x-zip-compressed'                                              => 'zip',
-        'application/gzip'                                                          => 'gz',
-        'application/x-tar'                                                         => 'tar',
-        'application/x-7z-compressed'                                               => '7z',
-        'application/vnd.rar'                                                       => 'rar',
-        'application/x-rar-compressed'                                              => 'rar',
+        'application/zip'              => 'zip',
+        'application/x-zip-compressed' => 'zip',
+        'application/gzip'             => 'gz',
+        'application/x-tar'            => 'tar',
+        'application/x-7z-compressed'  => '7z',
+        'application/vnd.rar'          => 'rar',
+        'application/x-rar-compressed' => 'rar',
         // Audio
-        'audio/mpeg'                                                                => 'mp3',
-        'audio/wav'                                                                 => 'wav',
-        'audio/x-wav'                                                               => 'wav',
-        'audio/ogg'                                                                 => 'ogg',
-        'audio/aac'                                                                 => 'aac',
-        'audio/flac'                                                                => 'flac',
+        'audio/mpeg'  => 'mp3',
+        'audio/wav'   => 'wav',
+        'audio/x-wav' => 'wav',
+        'audio/ogg'   => 'ogg',
+        'audio/aac'   => 'aac',
+        'audio/flac'  => 'flac',
         // Video
-        'video/mp4'                                                                 => 'mp4',
-        'video/quicktime'                                                           => 'mov',
-        'video/x-msvideo'                                                           => 'avi',
-        'video/webm'                                                                => 'webm',
-        'video/mpeg'                                                                => 'mpeg',
+        'video/mp4'       => 'mp4',
+        'video/quicktime' => 'mov',
+        'video/x-msvideo' => 'avi',
+        'video/webm'      => 'webm',
+        'video/mpeg'      => 'mpeg',
     ];
 
     /** @var array<string, string> */
@@ -108,18 +109,19 @@ final class DefaultUploadResolver implements UploadResolverInterface
         $this->extensionMap = $extensionMap ?? self::DEFAULT_EXTENSION_MAP;
     }
 
+    #[Override]
     public function resolve(UploadInput $upload): ResolvedUpload
     {
         [$mime, $image] = $this->detect($upload->sourcePath);
 
         $extension = $this->extensionMap[$mime] ?? null;
-        if ($extension === null) {
+        if (null === $extension) {
             throw UnsupportedTypeException::forMime($mime, $upload->clientFilename);
         }
 
         return new ResolvedUpload(
-            name:  sprintf('%s.%s', $this->slug($upload->clientFilename), $extension),
-            mime:  $mime,
+            name: sprintf('%s.%s', $this->slug($upload->clientFilename), $extension),
+            mime: $mime,
             image: $image,
         );
     }
@@ -129,36 +131,52 @@ final class DefaultUploadResolver implements UploadResolverInterface
      *
      * @return array{0: string, 1: ?ImageMeta} The normalised MIME and, for a
      *         raster image, its dimensions (null otherwise).
+     *
+     * @throws UnsupportedTypeException When the source is unreadable or its type cannot be detected.
      */
     private function detect(string $sourcePath): array
     {
-        if ($sourcePath === '' || ! is_readable($sourcePath)) {
+        if ('' === $sourcePath || ! is_readable($sourcePath)) {
             throw UnsupportedTypeException::forUnreadable($sourcePath);
         }
 
-        $size = @getimagesize($sourcePath);
-        if (is_array($size) && isset($size['mime'])) {
-            $mime = strtolower((string) $size['mime']);
+        $size = Warnings::suppress(getimagesize(...), $sourcePath);
+        if (false !== $size) {
+            $mime = strtolower($size['mime']);
 
-            return [$mime, new ImageMeta((int) $size[0], (int) $size[1], $mime)];
+            return [$mime, new ImageMeta($size[0], $size[1], $mime)];
         }
 
         $finfo = finfo_open(FILEINFO_MIME_TYPE);
-        $mime  = $finfo !== false ? finfo_file($finfo, $sourcePath) : false;
-        if ($mime === false || $mime === '') {
+        $mime  = false === $finfo ? false : finfo_file($finfo, $sourcePath);
+        if (false === $mime || '' === $mime) {
             throw UnsupportedTypeException::forUndetectable($sourcePath);
         }
 
         return [strtolower($mime), null];
     }
 
+    /**
+     * @throws InvalidPathException When the name has no slug-safe characters.
+     */
     private function slug(string $clientFilename): string
     {
         $slug = strtolower(pathinfo($clientFilename, PATHINFO_FILENAME));
-        $slug = (string) preg_replace('/[^a-z0-9]+/', '-', $slug);
-        $slug = trim((string) preg_replace('/-{2,}/', '-', $slug), '-');
+        $slug = (string) preg_replace(
+            pattern: '/[^a-z0-9]+/',
+            replacement: '-',
+            subject: $slug,
+        );
+        $slug = trim(
+            (string) preg_replace(
+                pattern: '/-{2,}/',
+                replacement: '-',
+                subject: $slug,
+            ),
+            characters: '-',
+        );
 
-        if ($slug === '') {
+        if ('' === $slug) {
             throw InvalidPathException::forEmptyName($clientFilename);
         }
 

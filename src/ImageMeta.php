@@ -10,6 +10,5 @@ final class ImageMeta
         public readonly int $width,
         public readonly int $height,
         public readonly string $mime,
-    ) {
-    }
+    ) {}
 }

@@ -18,8 +18,7 @@ final class UploadInput
         public readonly string $sourcePath,
         public readonly string $clientFilename,
         public readonly ?string $clientMime = null,
-    ) {
-    }
+    ) {}
 
     /**
      * Translate a single $_FILES["..."] entry into an UploadInput.
@@ -32,9 +31,9 @@ final class UploadInput
     public static function fromFilesArray(array $file): self
     {
         return new self(
-            sourcePath:     (string) ($file['tmp_name'] ?? ''),
+            sourcePath: (string) ($file['tmp_name'] ?? ''),
             clientFilename: (string) ($file['name'] ?? ''),
-            clientMime:     isset($file['type']) ? (string) $file['type'] : null,
+            clientMime: null === ($file['type'] ?? null) ? null : (string) $file['type'],
         );
     }
 }

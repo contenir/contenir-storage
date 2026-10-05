@@ -4,31 +4,68 @@ declare(strict_types=1);
 
 namespace Contenir\Storage\Adapter;
 
+use Contenir\Storage\BulkDeleteInterface;
+use Contenir\Storage\Config\PathVariantResolver;
+use Contenir\Storage\DefaultUploadResolver;
+use Contenir\Storage\Entry;
+use Contenir\Storage\Exception\InvalidPathException;
+use Contenir\Storage\Exception\NotFoundException;
+use Contenir\Storage\Exception\UnsupportedTypeException;
+use Contenir\Storage\Exception\WriteException;
+use Contenir\Storage\Image\ImageResizer;
+use Contenir\Storage\ImageMeta;
+use Contenir\Storage\Internal\Warnings;
+use Contenir\Storage\ListOptions;
+use Contenir\Storage\MissingVariantsReporterInterface;
+use Contenir\Storage\OnDemandVariantGeneratorInterface;
+use Contenir\Storage\SortDirection;
+use Contenir\Storage\SortField;
+use Contenir\Storage\StorageInterface;
+use Contenir\Storage\Thumbnail;
+use Contenir\Storage\UploadInput;
+use Contenir\Storage\UploadResolverInterface;
+use Contenir\Storage\Variant;
+use Contenir\Storage\VariantRegistry;
 use DateTimeImmutable;
 use InvalidArgumentException;
 use League\Flysystem\FileAttributes;
 use League\Flysystem\FilesystemException;
 use League\Flysystem\FilesystemOperator;
 use League\Flysystem\StorageAttributes;
-use Contenir\Storage\DefaultUploadResolver;
-use Contenir\Storage\Entry;
-use Contenir\Storage\BulkDeleteInterface;
-use Contenir\Storage\MissingVariantsReporterInterface;
-use Contenir\Storage\StorageInterface;
-use Contenir\Storage\Thumbnail;
-use Contenir\Storage\Exception\NotFoundException;
-use Contenir\Storage\Exception\WriteException;
-use Contenir\Storage\Image\ImageResizer;
-use Contenir\Storage\ImageMeta;
-use Contenir\Storage\ListOptions;
-use Contenir\Storage\OnDemandVariantGeneratorInterface;
-use Contenir\Storage\SortDirection;
-use Contenir\Storage\SortField;
-use Contenir\Storage\UploadInput;
-use Contenir\Storage\UploadResolverInterface;
-use Contenir\Storage\Variant;
-use Contenir\Storage\Config\PathVariantResolver;
-use Contenir\Storage\VariantRegistry;
+use Override;
+
+use function array_column;
+use function array_key_exists;
+use function array_map;
+use function basename;
+use function fclose;
+use function fopen;
+use function getimagesizefromstring;
+use function in_array;
+use function is_readable;
+use function is_resource;
+use function md5;
+use function mime_content_type;
+use function pathinfo;
+use function rename;
+use function rtrim;
+use function sprintf;
+use function str_replace;
+use function str_starts_with;
+use function strcmp;
+use function stream_copy_to_stream;
+use function stripos;
+use function strlen;
+use function strrpos;
+use function strtolower;
+use function substr;
+use function sys_get_temp_dir;
+use function tempnam;
+use function trim;
+use function unlink;
+use function usort;
+
+use const PATHINFO_EXTENSION;
 
 /**
  * S3-compatible storage backend (AWS S3, Cloudflare R2, MinIO, etc).
@@ -41,6 +78,14 @@ use Contenir\Storage\VariantRegistry;
  * iterating over many entries should expect a network round-trip per call.
  * Future optimisation: store width/height in custom object metadata at upload
  * time and resolve via HEAD.
+ *
+ * Calls that only read the bucket (existence checks, listings) let
+ * League\Flysystem\FilesystemException through; writes are reported as
+ * WriteException.
+ *
+ * @mago-expect lint:too-many-methods Implements four storage contracts plus the sibling-key scheme; splitting is a follow-up.
+ * @mago-expect lint:cyclomatic-complexity Implements four storage contracts plus the sibling-key scheme; splitting is a follow-up.
+ * @mago-expect lint:kan-defect Implements four storage contracts plus the sibling-key scheme; splitting is a follow-up.
  */
 final class S3 implements
     StorageInterface,
@@ -50,8 +95,8 @@ final class S3 implements
 {
     use Thumbnail;
 
-    private const VARIANT_SEPARATOR = '__';
-    private const COLLISION_MAX     = 1000;
+    private const string VARIANT_SEPARATOR = '__';
+    private const int COLLISION_MAX     = 1000;
 
     /**
      * Extensions probed (in order) when reconstructing an original key from a
@@ -59,7 +104,7 @@ final class S3 implements
      *
      * @var list<string>
      */
-    private const SOURCE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'];
+    private const array SOURCE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'];
 
     /**
      * Output formats an on-demand request may ask for. A variant carries only
@@ -69,7 +114,7 @@ final class S3 implements
      *
      * @var list<string>
      */
-    private const GENERATABLE_FORMATS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'];
+    private const array GENERATABLE_FORMATS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'];
 
     /**
      * Per-request positive cache of keys known to exist in the bucket.
@@ -89,6 +134,9 @@ final class S3 implements
 
     private readonly UploadResolverInterface $resolver;
 
+    /**
+     * @mago-expect lint:excessive-parameter-list Published constructor, called with named arguments.
+     */
     public function __construct(
         private readonly FilesystemOperator $fs,
         private readonly string $publicUrlBase,
@@ -101,120 +149,200 @@ final class S3 implements
         $this->resolver = $resolver ?? new DefaultUploadResolver();
     }
 
-    public function store(UploadInput $upload, string $directory): Entry
+    /**
+     * Close a stream unless the filesystem adapter already has.
+     */
+    private static function close(mixed $stream): void
     {
-        if (! is_readable($upload->sourcePath)) {
-            throw new WriteException(sprintf('Upload source "%s" is not readable.', $upload->sourcePath));
+        if (is_resource($stream)) {
+            fclose($stream);
+        }
+    }
+
+    private static function guessMimeFromName(string $name): ?string
+    {
+        return match (strtolower(pathinfo($name, PATHINFO_EXTENSION))) {
+            'jpg', 'jpeg' => 'image/jpeg',
+            'png'         => 'image/png',
+            'gif'         => 'image/gif',
+            'webp'        => 'image/webp',
+            'svg'         => 'image/svg+xml',
+            'avif'        => 'image/avif',
+            'mp3'         => 'audio/mpeg',
+            'm4a'         => 'audio/mp4',
+            'ogg', 'oga'  => 'audio/ogg',
+            'wav'         => 'audio/wav',
+            'mp4', 'm4v'  => 'video/mp4',
+            'mov'         => 'video/quicktime',
+            'webm'        => 'video/webm',
+            'pdf'         => 'application/pdf',
+            default       => null,
+        };
+    }
+
+    private static function matchesKeyword(Entry $entry, ListOptions $options): bool
+    {
+        return (
+            null === $options->keyword
+                || '' === $options->keyword
+                || false !== stripos($entry->name, $options->keyword)
+        );
+    }
+
+    /**
+     * Drop the in-memory cache of observed object keys. Long-running
+     * workers (e.g. asset-index backfill walking thousands of rows) will
+     * otherwise accumulate one entry per touched key + variant for the
+     * lifetime of the process. The cache is purely an optimisation —
+     * it's safe to clear at any point; subsequent `keyExists()` calls
+     * just fall through to a `fileExists()` round-trip until the cache
+     * is re-warmed by `list()` or `store()`.
+     */
+    public function clearKeyCache(): void
+    {
+        $this->knownKeys = [];
+    }
+
+    /**
+     * @throws NotFoundException   If $path does not exist.
+     * @throws WriteException      If the object cannot be deleted.
+     * @throws FilesystemException If the bucket cannot be queried.
+     */
+    #[Override]
+    public function delete(string $path): void
+    {
+        $path = $this->normalisePath($path);
+        if (! $this->fs->fileExists($path)) {
+            throw NotFoundException::forPath($path);
         }
 
-        $directory = $this->normalisePath($directory);
-        $resolved  = $this->resolver->resolve($upload);
-        $finalName = $this->resolveCollision($directory, $resolved->name);
-        $key       = $directory === '' ? $finalName : $directory . '/' . $finalName;
-
-        $stream = @fopen($upload->sourcePath, 'rb');
-        if ($stream === false) {
-            throw new WriteException(sprintf('Failed opening upload source "%s".', $upload->sourcePath));
-        }
         try {
-            // ContentType comes from the resolver's DETECTED mime, never the
-            // client-supplied header — the stored object advertises what it
-            // actually is.
-            $this->fs->writeStream($key, $stream, ['ContentType' => $resolved->mime]);
+            $this->fs->delete($path);
         } catch (FilesystemException $e) {
-            throw new WriteException(sprintf('Failed writing "%s": %s', $key, $e->getMessage()), 0, $e);
-        } finally {
-            if (is_resource($stream)) {
-                fclose($stream);
+            throw new WriteException(sprintf('Failed deleting "%s": %s', $path, $e->getMessage()), previous: $e);
+        }
+        unset($this->knownKeys[$path]);
+
+        /**
+         * Variant cleanup is best-effort — the primary delete already
+         * succeeded, and deleteMany() collects rather than throws failures.
+         */
+        $this->deleteMany($this->allVariantKeys($path));
+    }
+
+    #[Override]
+    public function deleteMany(array $keys): array
+    {
+        $failed = [];
+        foreach ($keys as $key) {
+            $key = $this->normalisePath($key);
+            try {
+                /**
+                 * Flysystem's delete() is idempotent, so an absent key is a
+                 * satisfied request rather than something to check for first.
+                 */
+                $this->fs->delete($key);
+                unset($this->knownKeys[$key]);
+            } catch (FilesystemException $e) {
+                $failed[$key] = $e->getMessage();
             }
+        }
+
+        return $failed;
+    }
+
+    /**
+     * @throws FilesystemException If the bucket cannot be queried.
+     */
+    #[Override]
+    public function exists(string $path): bool
+    {
+        return $this->fs->fileExists($this->normalisePath($path));
+    }
+
+    /**
+     * @throws WriteException      If the source cannot be downloaded or the variant written.
+     * @throws FilesystemException If the bucket cannot be queried.
+     */
+    #[Override]
+    public function generateForKey(string $variantKey): ?string
+    {
+        $variantKey = $this->normalisePath($variantKey);
+
+        $parsed = $this->parseVariantKey($variantKey);
+        if (null === $parsed) {
+            return null;
+        }
+        [$base, $variantName, $format] = $parsed;
+        $format = strtolower($format);
+
+        if (! $this->variants->has($variantName) || ! in_array($format, self::GENERATABLE_FORMATS, strict: true)) {
+            return null;
         }
 
         /**
-         * With autoGenerate the edge (e.g. the c-d.media Worker) materialises
-         * variants lazily on first request via regenerateMissingVariants(), so
-         * the upload request stores only the original and returns immediately.
+         * Already materialised (or warmed by a sibling list()) — nothing to do.
          */
-        if ($resolved->image !== null && ! $this->autoGenerate) {
-            foreach ($this->variants->allowedFor($this->paths, $key) as $variant) {
-                $this->generateVariant($upload->sourcePath, $key, $variant);
-            }
+        if ($this->keyExists($variantKey)) {
+            return $this->buildPublicUrl($variantKey);
         }
 
-        return $this->buildEntry($key, image: $resolved->image);
-    }
-
-    public function url(string $path, ?string $variant = null): ?string
-    {
-        if ($variant !== null && ! $this->variants->has($variant)) {
-            throw new InvalidArgumentException(sprintf('Unknown variant "%s".', $variant));
-        }
-
-        $path = $this->normalisePath($path);
-        if (! $this->keyExists($path)) {
+        /**
+         * Honour the ownership map: the miss-proxy must not materialise a
+         * family the original's path does not own.
+         */
+        $originalKey = $this->resolveOriginalForBase($base);
+        if (null === $originalKey || ! $this->owns($originalKey, $variantName)) {
             return null;
         }
 
-        if ($variant === null) {
-            return $this->buildPublicUrl($path);
+        $sourcePath = $this->copySourceToTemp($originalKey);
+        try {
+            $this->generateVariantFormat($sourcePath, $originalKey, $this->variants->get($variantName), $format);
+        } finally {
+            Warnings::suppress(unlink(...), $sourcePath);
         }
-
-        // For multi-format variants, url() returns the first declared format
-        // (callers needing a specific format use variantUrls()).
-        $variantObj = $this->variants->get($variant);
-        $format     = $variantObj->targetFormats()[0] ?? null;
-        $variantKey = $this->variantKey($path, $variant, $format);
-        if (! $this->keyExists($variantKey)) {
-            return null;
-        }
+        $this->knownKeys[$variantKey] = true;
 
         return $this->buildPublicUrl($variantKey);
     }
 
-    public function urlsForKey(string $path): array
+    /**
+     * @throws NotFoundException   If $path does not exist or is not an image.
+     * @throws FilesystemException If the bucket cannot be queried.
+     */
+    #[Override]
+    public function imageMeta(string $path): ImageMeta
     {
         $path = $this->normalisePath($path);
-        $urls = [$this->buildPublicUrl($path)];
-        foreach ($this->variants->all() as $variant) {
-            foreach ($variant->targetFormats() as $format) {
-                $urls[] = $this->buildPublicUrl($this->variantKey($path, $variant->name, $format));
-            }
+        if (! $this->fs->fileExists($path)) {
+            throw NotFoundException::forPath($path);
         }
-        return $urls;
+
+        try {
+            $bytes = $this->fs->read($path);
+        } catch (FilesystemException) {
+            throw NotFoundException::forPath($path);
+        }
+
+        $info = Warnings::suppress(getimagesizefromstring(...), $bytes);
+        if (false === $info) {
+            throw NotFoundException::forPath($path);
+        }
+
+        return new ImageMeta($info[0], $info[1], $info['mime']);
     }
 
-    /**
-     * URLs for every materialised format of a single variant, keyed by format
-     * (e.g. ['avif' => '…', 'webp' => '…']). When the variant declares no
-     * formats, the only key is 'source' and the value uses the original
-     * extension. URLs are computed without existence checks so callers can
-     * build `<picture>` markup without paying for HEAD round-trips.
-     *
-     * @return array<string, string>
-     */
-    public function variantUrls(string $path, string $variantName): array
-    {
-        if (! $this->variants->has($variantName)) {
-            throw new InvalidArgumentException(sprintf('Unknown variant "%s".', $variantName));
-        }
-        $variant = $this->variants->get($variantName);
-        $path    = $this->normalisePath($path);
-
-        $urls = [];
-        foreach ($variant->targetFormats() as $format) {
-            $key = $format ?? 'source';
-            $urls[$key] = $this->buildPublicUrl($this->variantKey($path, $variantName, $format));
-        }
-        return $urls;
-    }
-
+    #[Override]
     public function list(string $path, ?ListOptions $options = null): iterable
     {
-        $options = $options ?? new ListOptions();
+        $options ??= new ListOptions();
         $path    = $this->normalisePath($path);
 
         $entries = [];
         try {
-            foreach ($this->fs->listContents($path, false) as $attrs) {
+            /** @var StorageAttributes $attrs */
+            foreach ($this->fs->listContents($path, deep: false) as $attrs) {
                 /**
                  * Record every key the bucket is reporting at this prefix —
                  * originals AND variant siblings — before any filtering. The
@@ -226,28 +354,18 @@ final class S3 implements
                 }
 
                 $name = basename($attrs->path());
-                if (str_starts_with($name, '.')) {
-                    continue;
-                }
-                if ($this->isVariantKey($name)) {
+                if (str_starts_with($name, '.') || $this->isVariantKey($name)) {
                     continue;
                 }
 
                 $entry = $this->buildAttributesEntry($attrs);
-
-                if (! $options->includeDirectories && $entry->isDir) {
-                    continue;
-                }
-                if (
-                    $options->keyword !== null && $options->keyword !== ''
-                    && stripos($entry->name, $options->keyword) === false
-                ) {
+                if (! $options->includeDirectories && $entry->isDir || ! self::matchesKeyword($entry, $options)) {
                     continue;
                 }
 
                 $entries[] = $entry;
             }
-        } catch (FilesystemException $e) {
+        } catch (FilesystemException) {
             throw NotFoundException::forPath($path);
         }
 
@@ -256,57 +374,64 @@ final class S3 implements
     }
 
     /**
-     * Resolve key existence, preferring the in-memory cache populated by
-     * earlier list() calls. Falls back to a fileExists() round-trip when the
-     * key hasn't been observed yet — preserves correctness when url() is
-     * called for paths the caller didn't list first.
+     * @throws NotFoundException   If $path does not exist.
+     * @throws FilesystemException If the bucket cannot be queried.
      */
-    private function keyExists(string $key): bool
-    {
-        if (isset($this->knownKeys[$key])) {
-            return true;
-        }
-        if ($this->fs->fileExists($key)) {
-            $this->knownKeys[$key] = true;
-            return true;
-        }
-        return false;
-    }
-
-    public function exists(string $path): bool
-    {
-        return $this->fs->fileExists($this->normalisePath($path));
-    }
-
-    public function delete(string $path): void
+    #[Override]
+    public function missingVariants(string $path): array
     {
         $path = $this->normalisePath($path);
         if (! $this->fs->fileExists($path)) {
             throw NotFoundException::forPath($path);
         }
 
-        try {
-            $this->fs->delete($path);
-        } catch (FilesystemException $e) {
-            throw new WriteException(sprintf('Failed deleting "%s": %s', $path, $e->getMessage()), 0, $e);
-        }
-        unset($this->knownKeys[$path]);
+        return array_column($this->missingVariantEntries($path), column_key: 'key');
+    }
 
-        foreach ($this->variants->all() as $variant) {
-            foreach ($variant->targetFormats() as $format) {
-                $variantKey = $this->variantKey($path, $variant->name, $format);
-                try {
-                    if ($this->fs->fileExists($variantKey)) {
-                        $this->fs->delete($variantKey);
-                    }
-                } catch (FilesystemException $_e) {
-                    // Variant cleanup is best-effort — primary delete already succeeded.
-                }
-                unset($this->knownKeys[$variantKey]);
+    /**
+     * @throws NotFoundException   If $path does not exist.
+     * @throws WriteException      If a variant cannot be generated or written.
+     * @throws FilesystemException If the bucket cannot be queried.
+     */
+    #[Override]
+    public function regenerateMissingVariants(string $path): array
+    {
+        $path = $this->normalisePath($path);
+        if (! $this->fs->fileExists($path)) {
+            throw NotFoundException::forPath($path);
+        }
+
+        /**
+         * Pre-pass, so we don't spill the source object to disk for an asset
+         * that is already fully materialised.
+         */
+        $missing = $this->missingVariantEntries($path);
+        if ([] === $missing) {
+            return [];
+        }
+
+        $sourcePath = $this->copySourceToTemp($path);
+
+        try {
+            $generated = [];
+            foreach ($missing as $entry) {
+                $this->generateVariantFormat($sourcePath, $path, $entry['variant'], $entry['format']);
+                $this->knownKeys[$entry['key']] = true;
+                $generated[]                    = $entry['key'];
             }
+
+            return $generated;
+        } finally {
+            Warnings::suppress(unlink(...), $sourcePath);
         }
     }
 
+    /**
+     * @throws NotFoundException   If $from does not exist.
+     * @throws WriteException      If $to exists or the move fails.
+     * @throws FilesystemException If the bucket cannot be queried.
+     */
+    #[Override]
     public function rename(string $from, string $to): void
     {
         $from = $this->normalisePath($from);
@@ -324,8 +449,7 @@ final class S3 implements
         } catch (FilesystemException $e) {
             throw new WriteException(
                 sprintf('Failed renaming "%s" to "%s": %s', $from, $to, $e->getMessage()),
-                0,
-                $e,
+                previous: $e,
             );
         }
         unset($this->knownKeys[$from]);
@@ -333,104 +457,336 @@ final class S3 implements
 
         foreach ($this->variants->all() as $variant) {
             foreach ($variant->targetFormats() as $format) {
-                $varFrom = $this->variantKey($from, $variant->name, $format);
-                $varTo   = $this->variantKey($to, $variant->name, $format);
-                try {
-                    if ($this->fs->fileExists($varFrom)) {
-                        $this->fs->move($varFrom, $varTo);
-                        unset($this->knownKeys[$varFrom]);
-                        $this->knownKeys[$varTo] = true;
-                    }
-                } catch (FilesystemException $_e) {
-                    // Variant rename is best-effort — primary rename already succeeded.
+                $this->moveVariant(
+                    $this->variantKey($from, $variant->name, $format),
+                    $this->variantKey($to, $variant->name, $format),
+                );
+            }
+        }
+    }
+
+    /**
+     * @throws WriteException           If the upload or a variant cannot be written.
+     * @throws UnsupportedTypeException If the upload's type cannot be detected or is not storable.
+     * @throws InvalidPathException     If the client filename has no slug-safe characters.
+     * @throws FilesystemException      If the bucket cannot be queried.
+     */
+    #[Override]
+    public function store(UploadInput $upload, string $directory): Entry
+    {
+        if (! is_readable($upload->sourcePath)) {
+            throw new WriteException(sprintf('Upload source "%s" is not readable.', $upload->sourcePath));
+        }
+
+        $directory = $this->normalisePath($directory);
+        $resolved  = $this->resolver->resolve($upload);
+        $finalName = $this->resolveCollision($directory, $resolved->name);
+        $key       = '' === $directory ? $finalName : "{$directory}/{$finalName}";
+
+        /**
+         * ContentType comes from the resolver's DETECTED mime, never the
+         * client-supplied header — the stored object advertises what it
+         * actually is.
+         */
+        $this->upload($upload->sourcePath, $key, $resolved->mime);
+
+        /**
+         * With autoGenerate the edge (e.g. the c-d.media Worker) materialises
+         * variants lazily on first request via regenerateMissingVariants(), so
+         * the upload request stores only the original and returns immediately.
+         */
+        if (null !== $resolved->image && ! $this->autoGenerate) {
+            foreach ($this->variants->allowedFor($this->paths, $key) as $variant) {
+                foreach ($variant->targetFormats() as $format) {
+                    $this->generateVariantFormat($upload->sourcePath, $key, $variant, $format);
                 }
             }
         }
+
+        return $this->buildEntry($key, image: $resolved->image);
     }
 
-    public function imageMeta(string $path): ImageMeta
+    /**
+     * @throws FilesystemException If the bucket cannot be queried.
+     */
+    #[Override]
+    public function url(string $path, ?string $variant = null): ?string
     {
-        $path = $this->normalisePath($path);
-        if (! $this->fs->fileExists($path)) {
-            throw NotFoundException::forPath($path);
+        if (null !== $variant && ! $this->variants->has($variant)) {
+            throw new InvalidArgumentException(sprintf('Unknown variant "%s".', $variant));
         }
 
+        $path = $this->normalisePath($path);
+        if (! $this->keyExists($path)) {
+            return null;
+        }
+
+        if (null === $variant) {
+            return $this->buildPublicUrl($path);
+        }
+
+        /**
+         * For multi-format variants, url() returns the first declared format
+         * (callers needing a specific format use variantUrls()).
+         */
+        $format     = $this->variants->get($variant)->targetFormats()[0] ?? null;
+        $variantKey = $this->variantKey($path, $variant, $format);
+
+        return $this->keyExists($variantKey) ? $this->buildPublicUrl($variantKey) : null;
+    }
+
+    #[Override]
+    public function urlsForKey(string $path): array
+    {
+        $path = $this->normalisePath($path);
+
+        return [$this->buildPublicUrl($path), ...array_map($this->buildPublicUrl(...), $this->allVariantKeys($path))];
+    }
+
+    /**
+     * URLs for every materialised format of a single variant, keyed by format
+     * (e.g. ['avif' => '…', 'webp' => '…']). When the variant declares no
+     * formats, the only key is 'source' and the value uses the original
+     * extension. URLs are computed without existence checks so callers can
+     * build `<picture>` markup without paying for HEAD round-trips.
+     *
+     * @return array<string, string>
+     */
+    #[Override]
+    public function variantUrls(string $path, string $variantName): array
+    {
+        if (! $this->variants->has($variantName)) {
+            throw new InvalidArgumentException(sprintf('Unknown variant "%s".', $variantName));
+        }
+        $variant = $this->variants->get($variantName);
+        $path    = $this->normalisePath($path);
+
+        $urls = [];
+        foreach ($variant->targetFormats() as $format) {
+            $urls[$format ?? 'source'] = $this->buildPublicUrl($this->variantKey($path, $variantName, $format));
+        }
+        return $urls;
+    }
+
+    /**
+     * Every sibling key a variant of $path could occupy, materialised or not.
+     *
+     * @return list<string>
+     */
+    private function allVariantKeys(string $path): array
+    {
+        $keys = [];
+        foreach ($this->variants->all() as $variant) {
+            foreach ($variant->targetFormats() as $format) {
+                $keys[] = $this->variantKey($path, $variant->name, $format);
+            }
+        }
+
+        return $keys;
+    }
+
+    private function buildAttributesEntry(StorageAttributes $attrs): Entry
+    {
+        $name         = basename($attrs->path());
+        $isDir        = $attrs->isDir();
+        $size         = 0;
+        $fallbackMime = $isDir ? 'inode/directory' : 'application/octet-stream';
+        $mime         = $fallbackMime;
+        $mtime        = new DateTimeImmutable();
+
+        if ($attrs instanceof FileAttributes) {
+            $size = $attrs->fileSize() ?? 0;
+            /**
+             * S3 ListObjectsV2 doesn't return Content-Type per object, so
+             * FileAttributes::mimeType() is typically null after a list call.
+             * Fall back to extension-based inference so isImage()/isAudio()
+             * tests in templates work without paying for a HEAD per entry.
+             */
+            $mime         = $attrs->mimeType() ?? self::guessMimeFromName($name) ?? $fallbackMime;
+            $lastModified = $attrs->lastModified();
+            if (null !== $lastModified) {
+                $mtime = $mtime->setTimestamp($lastModified);
+            }
+        }
+
+        return new Entry(
+            id: md5($name),
+            name: $name,
+            path: $attrs->path(),
+            isDir: $isDir,
+            size: $size,
+            mtime: $mtime,
+            mime: $mime,
+        );
+    }
+
+    private function buildEntry(string $key, ?ImageMeta $image = null): Entry
+    {
+        $name = basename($key);
         try {
-            $bytes = $this->fs->read($path);
+            $size = $this->fs->fileSize($key);
+        } catch (FilesystemException) {
+            $size = 0;
+        }
+        try {
+            $mtime = (new DateTimeImmutable())->setTimestamp($this->fs->lastModified($key));
+        } catch (FilesystemException) {
+            $mtime = new DateTimeImmutable();
+        }
+        try {
+            $mime = $this->fs->mimeType($key);
+        } catch (FilesystemException) {
+            $mime = 'application/octet-stream';
+        }
+
+        return new Entry(
+            id: md5($name),
+            name: $name,
+            path: $key,
+            isDir: false,
+            size: $size,
+            mtime: $mtime,
+            mime: $mime,
+            image: $image,
+        );
+    }
+
+    private function buildPublicUrl(string $key): string
+    {
+        return rtrim($this->publicUrlBase, characters: '/') . '/' . $key;
+    }
+
+    /** @return callable(Entry, Entry): int */
+    private function comparator(SortField $field, SortDirection $dir): callable
+    {
+        $sign = SortDirection::Asc === $dir ? 1 : -1;
+
+        return static function (Entry $a, Entry $b) use ($field, $sign): int {
+            $cmp = match ($field) {
+                SortField::Name => strcmp($a->name, $b->name),
+                SortField::Time => $a->mtime <=> $b->mtime,
+                SortField::Size => $a->size <=> $b->size,
+                SortField::Type => strcmp($a->mime, $b->mime),
+            };
+            return $cmp * $sign;
+        };
+    }
+
+    /**
+     * Stream an object from the backend into a local temp file carrying the
+     * object's extension, returning the temp path. The caller owns the file and
+     * must unlink it. Reading the body once and resizing from disk is far
+     * cheaper than streaming the original through ImageMagick per variant.
+     *
+     * @throws WriteException If the source cannot be opened or copied.
+     */
+    private function copySourceToTemp(string $key): string
+    {
+        $sourcePath = $this->tempFile('cms_s3_source_', pathinfo($key, PATHINFO_EXTENSION));
+
+        try {
+            $remote = $this->fs->readStream($key);
         } catch (FilesystemException $e) {
-            throw NotFoundException::forPath($path);
+            Warnings::suppress(unlink(...), $sourcePath);
+            throw new WriteException(
+                sprintf('Failed opening source stream "%s": %s', $key, $e->getMessage()),
+                previous: $e,
+            );
         }
 
-        $info = @getimagesizefromstring($bytes);
-        if ($info === false) {
-            throw NotFoundException::forPath($path);
+        $local = Warnings::suppress(fopen(...), $sourcePath, mode: 'wb');
+        if (false === $local) {
+            self::close($remote);
+            Warnings::suppress(unlink(...), $sourcePath);
+            throw new WriteException(sprintf('Cannot open temp file "%s" for writing.', $sourcePath));
         }
-
-        return new ImageMeta($info[0], $info[1], $info['mime'] ?? 'application/octet-stream');
-    }
-
-    public function regenerateMissingVariants(string $path): array
-    {
-        $path = $this->normalisePath($path);
-        if (! $this->fs->fileExists($path)) {
-            throw NotFoundException::forPath($path);
-        }
-
-        // Pre-pass, so we don't spill the source object to disk for an asset
-        // that is already fully materialised.
-        $missing = $this->missingVariantEntries($path);
-        if ($missing === []) {
-            return [];
-        }
-
-        $sourcePath = $this->copySourceToTemp($path);
 
         try {
-            $generated = [];
-            foreach ($missing as $entry) {
-                $this->generateVariantFormat($sourcePath, $path, $entry['variant'], $entry['format']);
-                $this->knownKeys[$entry['key']] = true;
-                $generated[] = $entry['key'];
+            if (false === stream_copy_to_stream($remote, $local)) {
+                throw new WriteException(sprintf('Failed copying source "%s" to local temp.', $key));
             }
-
-            return $generated;
         } finally {
-            @unlink($sourcePath);
+            self::close($remote);
+            self::close($local);
+        }
+
+        return $sourcePath;
+    }
+
+    /**
+     * Resize $sourcePath into one variant format and upload it as a sibling of
+     * $originalKey.
+     *
+     * @throws WriteException If the variant cannot be generated or written.
+     */
+    private function generateVariantFormat(
+        string $sourcePath,
+        string $originalKey,
+        Variant $variant,
+        ?string $format,
+    ): void {
+        /**
+         * ImageMagick infers the output encoder from the destination's
+         * extension, so the temp file MUST carry the target format's suffix.
+         */
+        $tmpPath = $this->tempFile('cms_s3_variant_', $format ?? pathinfo($originalKey, PATHINFO_EXTENSION));
+
+        try {
+            $this->resizer->resize(
+                $sourcePath,
+                $tmpPath,
+                $variant->width,
+                $variant->height,
+                $variant->fit,
+                $variant->quality,
+            );
+
+            $mime = Warnings::suppress(mime_content_type(...), $tmpPath);
+            $this->upload(
+                $tmpPath,
+                $this->variantKey($originalKey, $variant->name, $format),
+                false === $mime ? 'application/octet-stream' : $mime,
+            );
+        } finally {
+            Warnings::suppress(unlink(...), $tmpPath);
         }
     }
 
-    public function deleteMany(array $keys): array
+    private function isVariantKey(string $name): bool
     {
-        $failed = [];
-        foreach ($keys as $key) {
-            $key = $this->normalisePath($key);
-            try {
-                // Flysystem's delete() is idempotent, so an absent key is a
-                // satisfied request rather than something to check for first.
-                $this->fs->delete($key);
-                unset($this->knownKeys[$key]);
-            } catch (FilesystemException $e) {
-                $failed[$key] = $e->getMessage();
-            }
-        }
+        $dot  = strrpos($name, needle: '.');
+        $base = false === $dot ? $name : substr($name, offset: 0, length: $dot);
+        $sep  = strrpos($base, self::VARIANT_SEPARATOR);
 
-        return $failed;
+        return false !== $sep && $this->variants->has(substr($base, $sep + strlen(self::VARIANT_SEPARATOR)));
     }
 
-    public function missingVariants(string $path): array
+    /**
+     * Resolve key existence, preferring the in-memory cache populated by
+     * earlier list() calls. Falls back to a fileExists() round-trip when the
+     * key hasn't been observed yet — preserves correctness when url() is
+     * called for paths the caller didn't list first.
+     *
+     * @throws FilesystemException If the bucket cannot be queried.
+     */
+    private function keyExists(string $key): bool
     {
-        $path = $this->normalisePath($path);
-        if (! $this->fs->fileExists($path)) {
-            throw NotFoundException::forPath($path);
+        if (array_key_exists($key, $this->knownKeys)) {
+            return true;
         }
-
-        return array_column($this->missingVariantEntries($path), 'key');
+        if ($this->fs->fileExists($key)) {
+            $this->knownKeys[$key] = true;
+            return true;
+        }
+        return false;
     }
 
     /**
      * Variant/format combinations $path owns but has not materialised.
      *
      * @return list<array{variant: Variant, format: ?string, key: string}>
+     *
+     * @throws FilesystemException If the bucket cannot be queried.
      */
     private function missingVariantEntries(string $path): array
     {
@@ -447,55 +803,46 @@ final class S3 implements
         return $missing;
     }
 
-    public function generateForKey(string $variantKey): ?string
+    /**
+     * Move one variant sibling, if it exists. Best-effort — the primary
+     * rename has already succeeded, so a failure here leaves the sibling
+     * behind rather than failing the call.
+     */
+    private function moveVariant(string $from, string $to): void
     {
-        $variantKey = $this->normalisePath($variantKey);
-
-        $parsed = $this->parseVariantKey($variantKey);
-        if ($parsed === null) {
-            return null;
-        }
-        [$base, $variantName, $format] = $parsed;
-
-        if (! $this->variants->has($variantName)) {
-            return null;
-        }
-        $variant = $this->variants->get($variantName);
-
-        $format = strtolower($format);
-        if (! in_array($format, self::GENERATABLE_FORMATS, true)) {
-            return null;
-        }
-
-        // Already materialised (or warmed by a sibling list()) — nothing to do.
-        if ($this->keyExists($variantKey)) {
-            return $this->buildPublicUrl($variantKey);
-        }
-
-        $originalKey = $this->resolveOriginalForBase($base);
-        if ($originalKey === null) {
-            return null;
-        }
-
-        // Honour the ownership map: the miss-proxy must not materialise a
-        // family the original's path does not own.
-        if (
-            $this->paths !== null
-            && $this->paths->isConfigured()
-            && ! $this->paths->allows($originalKey, $variantName)
-        ) {
-            return null;
-        }
-
-        $sourcePath = $this->copySourceToTemp($originalKey);
         try {
-            $this->generateVariantFormat($sourcePath, $originalKey, $variant, $format);
-        } finally {
-            @unlink($sourcePath);
+            if (! $this->fs->fileExists($from)) {
+                return;
+            }
+            $this->fs->move($from, $to);
+        } catch (FilesystemException) {
+            return;
         }
-        $this->knownKeys[$variantKey] = true;
 
-        return $this->buildPublicUrl($variantKey);
+        unset($this->knownKeys[$from]);
+        $this->knownKeys[$to] = true;
+    }
+
+    private function normalisePath(string $path): string
+    {
+        return trim(str_replace(
+            search: '\\',
+            replace: '/',
+            subject: $path,
+        ), characters: '/');
+    }
+
+    /**
+     * Whether the ownership map lets $originalKey materialise $variantName.
+     * An absent or unconfigured map allows every variant.
+     */
+    private function owns(string $originalKey, string $variantName): bool
+    {
+        return (
+            null === $this->paths
+                || ! $this->paths->isConfigured()
+                || $this->paths->allows($originalKey, $variantName)
+        );
     }
 
     /**
@@ -506,20 +853,20 @@ final class S3 implements
      */
     private function parseVariantKey(string $key): ?array
     {
-        $dot = strrpos($key, '.');
-        if ($dot === false) {
+        $dot = strrpos($key, needle: '.');
+        if (false === $dot) {
             return null;
         }
         $format = substr($key, $dot + 1);
-        $stem   = substr($key, 0, $dot);
+        $stem   = substr($key, offset: 0, length: $dot);
 
         $sep = strrpos($stem, self::VARIANT_SEPARATOR);
-        if ($sep === false) {
+        if (false === $sep) {
             return null;
         }
-        $base        = substr($stem, 0, $sep);
+        $base        = substr($stem, offset: 0, length: $sep);
         $variantName = substr($stem, $sep + strlen(self::VARIANT_SEPARATOR));
-        if ($base === '' || $variantName === '') {
+        if ('' === $base || '' === $variantName) {
             return null;
         }
 
@@ -527,13 +874,37 @@ final class S3 implements
     }
 
     /**
+     * @throws WriteException      If no free name is found.
+     * @throws FilesystemException If the bucket cannot be queried.
+     */
+    private function resolveCollision(string $directory, string $filename): string
+    {
+        $prefix = '' === $directory ? '' : "{$directory}/";
+        if (! $this->fs->fileExists($prefix . $filename)) {
+            return $filename;
+        }
+        $dot  = strrpos($filename, needle: '.');
+        $base = false === $dot ? $filename : substr($filename, offset: 0, length: $dot);
+        $ext  = false === $dot ? '' : substr($filename, $dot);
+        for ($i = 1; $i < self::COLLISION_MAX; ++$i) {
+            $candidate = sprintf('%s_%d%s', $base, $i, $ext);
+            if (! $this->fs->fileExists($prefix . $candidate)) {
+                return $candidate;
+            }
+        }
+        throw new WriteException(sprintf('Cannot allocate unique filename in "%s".', $directory));
+    }
+
+    /**
      * Locate the original object for a variant key's base (extension stripped)
      * by probing the known source extensions.
+     *
+     * @throws FilesystemException If the bucket cannot be queried.
      */
     private function resolveOriginalForBase(string $base): ?string
     {
         foreach (self::SOURCE_EXTENSIONS as $ext) {
-            $candidate = $base . '.' . $ext;
+            $candidate = "{$base}.{$ext}";
             if ($this->keyExists($candidate)) {
                 return $candidate;
             }
@@ -542,273 +913,55 @@ final class S3 implements
     }
 
     /**
-     * Stream an object from the backend into a local temp file carrying the
-     * object's extension, returning the temp path. The caller owns the file and
-     * must unlink it. Reading the body once and resizing from disk is far
-     * cheaper than streaming the original through ImageMagick per variant.
+     * Allocate a temp file whose name ends in ".$extension" (".tmp" when the
+     * extension is empty).
      *
-     * @throws WriteException If the source cannot be opened or copied.
+     * @throws WriteException If no temp file can be created.
      */
-    private function copySourceToTemp(string $key): string
+    private function tempFile(string $prefix, string $extension): string
     {
-        $sourceExt  = pathinfo($key, PATHINFO_EXTENSION) ?: 'tmp';
-        $sourceBase = tempnam(sys_get_temp_dir(), 'cms_s3_source_');
-        if ($sourceBase === false) {
-            throw new WriteException('Cannot allocate temp file for source download.');
-        }
-        $sourcePath = $sourceBase . '.' . $sourceExt;
-        @rename($sourceBase, $sourcePath);
-
-        try {
-            $remote = $this->fs->readStream($key);
-        } catch (FilesystemException $e) {
-            @unlink($sourcePath);
-            throw new WriteException(
-                sprintf('Failed opening source stream "%s": %s', $key, $e->getMessage()),
-                0,
-                $e,
-            );
+        $base = tempnam(sys_get_temp_dir(), $prefix);
+        if (false === $base) {
+            throw new WriteException('Cannot allocate a temp file.');
         }
 
-        $local = @fopen($sourcePath, 'wb');
-        if ($local === false) {
-            if (is_resource($remote)) {
-                fclose($remote);
-            }
-            @unlink($sourcePath);
-            throw new WriteException(sprintf('Cannot open temp file "%s" for writing.', $sourcePath));
-        }
+        $path = $base . '.' . ('' === $extension ? 'tmp' : $extension);
+        Warnings::suppress(rename(...), $base, $path);
 
-        try {
-            if (stream_copy_to_stream($remote, $local) === false) {
-                throw new WriteException(sprintf('Failed copying source "%s" to local temp.', $key));
-            }
-        } finally {
-            if (is_resource($remote)) {
-                fclose($remote);
-            }
-            fclose($local);
-        }
-
-        return $sourcePath;
+        return $path;
     }
 
     /**
-     * Drop the in-memory cache of observed object keys. Long-running
-     * workers (e.g. asset-index backfill walking thousands of rows) will
-     * otherwise accumulate one entry per touched key + variant for the
-     * lifetime of the process. The cache is purely an optimisation —
-     * it's safe to clear at any point; subsequent `keyExists()` calls
-     * just fall through to a `fileExists()` round-trip until the cache
-     * is re-warmed by `list()` or `store()`.
+     * Upload a local file to $key.
+     *
+     * @throws WriteException If the file cannot be opened or written.
      */
-    public function clearKeyCache(): void
+    private function upload(string $localPath, string $key, string $mime): void
     {
-        $this->knownKeys = [];
-    }
-
-    private function generateVariant(string $sourcePath, string $originalKey, Variant $variant): void
-    {
-        foreach ($variant->targetFormats() as $format) {
-            $this->generateVariantFormat($sourcePath, $originalKey, $variant, $format);
+        $stream = Warnings::suppress(fopen(...), $localPath, mode: 'rb');
+        if (false === $stream) {
+            throw new WriteException(sprintf('Failed opening "%s" for upload.', $localPath));
         }
-    }
-
-    private function generateVariantFormat(
-        string $sourcePath,
-        string $originalKey,
-        Variant $variant,
-        ?string $format,
-    ): void {
-        $variantKey = $this->variantKey($originalKey, $variant->name, $format);
-        // ImageMagick infers the output encoder from the destination's extension,
-        // so the tmp file MUST carry the target format's suffix.
-        $ext     = $format ?? pathinfo($originalKey, PATHINFO_EXTENSION) ?: 'tmp';
-        $tmpBase = tempnam(sys_get_temp_dir(), 'cms_s3_variant_');
-        if ($tmpBase === false) {
-            throw new WriteException('Cannot allocate temp file for variant generation.');
-        }
-        $tmpPath = $tmpBase . '.' . $ext;
-        @rename($tmpBase, $tmpPath);
 
         try {
-            $this->resizer->resize(
-                $sourcePath,
-                $tmpPath,
-                $variant->width,
-                $variant->height,
-                $variant->fit,
-                $variant->quality,
-            );
-
-            $stream = @fopen($tmpPath, 'rb');
-            if ($stream === false) {
-                throw new WriteException(sprintf('Failed opening variant temp "%s".', $tmpPath));
-            }
-            try {
-                $this->fs->writeStream($variantKey, $stream, [
-                    'ContentType' => mime_content_type($tmpPath) ?: 'application/octet-stream',
-                ]);
-            } finally {
-                if (is_resource($stream)) {
-                    fclose($stream);
-                }
-            }
+            $this->fs->writeStream($key, $stream, ['ContentType' => $mime]);
+        } catch (FilesystemException $e) {
+            throw new WriteException(sprintf('Failed writing "%s": %s', $key, $e->getMessage()), previous: $e);
         } finally {
-            @unlink($tmpPath);
+            self::close($stream);
         }
     }
 
     private function variantKey(string $key, string $variantName, ?string $format = null): string
     {
-        $dot  = strrpos($key, '.');
-        $base = $dot !== false ? substr($key, 0, $dot) : $key;
-        $ext  = $format !== null ? '.' . $format : ($dot !== false ? substr($key, $dot) : '');
+        $dot  = strrpos($key, needle: '.');
+        $base = false === $dot ? $key : substr($key, offset: 0, length: $dot);
+        $ext  = match (true) {
+            null !== $format => ".{$format}",
+            false !== $dot => substr($key, $dot),
+            default => '',
+        };
+
         return $base . self::VARIANT_SEPARATOR . $variantName . $ext;
-    }
-
-    private function isVariantKey(string $name): bool
-    {
-        $dot  = strrpos($name, '.');
-        $base = $dot === false ? $name : substr($name, 0, $dot);
-        $sep  = strrpos($base, self::VARIANT_SEPARATOR);
-        if ($sep === false) {
-            return false;
-        }
-        $candidate = substr($base, $sep + strlen(self::VARIANT_SEPARATOR));
-        return $this->variants->has($candidate);
-    }
-
-    private function buildEntry(string $key, ?ImageMeta $image = null): Entry
-    {
-        $name = basename($key);
-        try {
-            $size = $this->fs->fileSize($key);
-        } catch (FilesystemException $_e) {
-            $size = 0;
-        }
-        try {
-            $mtime = (new DateTimeImmutable())->setTimestamp($this->fs->lastModified($key));
-        } catch (FilesystemException $_e) {
-            $mtime = new DateTimeImmutable();
-        }
-        try {
-            $mime = $this->fs->mimeType($key);
-        } catch (FilesystemException $_e) {
-            $mime = 'application/octet-stream';
-        }
-
-        return new Entry(
-            id:    md5($name),
-            name:  $name,
-            path:  $key,
-            isDir: false,
-            size:  $size,
-            mtime: $mtime,
-            mime:  $mime,
-            image: $image,
-        );
-    }
-
-    private function buildAttributesEntry(StorageAttributes $attrs): Entry
-    {
-        $name  = basename($attrs->path());
-        $isDir = $attrs->isDir();
-        $size  = 0;
-        $fallbackMime = $isDir ? 'inode/directory' : 'application/octet-stream';
-        $mime  = $fallbackMime;
-        $mtime = new DateTimeImmutable();
-
-        if ($attrs instanceof FileAttributes) {
-            $size = $attrs->fileSize() ?? 0;
-            /**
-             * S3 ListObjectsV2 doesn't return Content-Type per object, so
-             * FileAttributes::mimeType() is typically null after a list call.
-             * Fall back to extension-based inference so isImage()/isAudio()
-             * tests in templates work without paying for a HEAD per entry.
-             */
-            $mime = $attrs->mimeType() ?? self::guessMimeFromName($name) ?? $fallbackMime;
-            if ($attrs->lastModified() !== null) {
-                $mtime = (new DateTimeImmutable())->setTimestamp($attrs->lastModified());
-            }
-        }
-
-        return new Entry(
-            id:    md5($name),
-            name:  $name,
-            path:  $attrs->path(),
-            isDir: $isDir,
-            size:  $size,
-            mtime: $mtime,
-            mime:  $mime,
-        );
-    }
-
-    private static function guessMimeFromName(string $name): ?string
-    {
-        $ext = strtolower((string) pathinfo($name, PATHINFO_EXTENSION));
-        return match ($ext) {
-            'jpg', 'jpeg' => 'image/jpeg',
-            'png'         => 'image/png',
-            'gif'         => 'image/gif',
-            'webp'        => 'image/webp',
-            'svg'         => 'image/svg+xml',
-            'avif'        => 'image/avif',
-            'mp3'         => 'audio/mpeg',
-            'm4a'         => 'audio/mp4',
-            'ogg', 'oga'  => 'audio/ogg',
-            'wav'         => 'audio/wav',
-            'mp4'         => 'video/mp4',
-            'm4v'         => 'video/mp4',
-            'mov'         => 'video/quicktime',
-            'webm'        => 'video/webm',
-            'pdf'         => 'application/pdf',
-            default       => null,
-        };
-    }
-
-    private function buildPublicUrl(string $key): string
-    {
-        return rtrim($this->publicUrlBase, '/') . '/' . $key;
-    }
-
-    private function normalisePath(string $path): string
-    {
-        return trim(str_replace('\\', '/', $path), '/');
-    }
-
-    private function resolveCollision(string $directory, string $filename): string
-    {
-        $key = $directory === '' ? $filename : $directory . '/' . $filename;
-        if (! $this->fs->fileExists($key)) {
-            return $filename;
-        }
-        $dot  = strrpos($filename, '.');
-        $base = $dot === false ? $filename : substr($filename, 0, $dot);
-        $ext  = $dot === false ? '' : substr($filename, $dot);
-        for ($i = 1; $i < self::COLLISION_MAX; $i++) {
-            $candidate    = sprintf('%s_%d%s', $base, $i, $ext);
-            $candidateKey = $directory === '' ? $candidate : $directory . '/' . $candidate;
-            if (! $this->fs->fileExists($candidateKey)) {
-                return $candidate;
-            }
-        }
-        throw new WriteException(sprintf('Cannot allocate unique filename in "%s".', $directory));
-    }
-
-    /** @return callable(Entry, Entry): int */
-    private function comparator(SortField $field, SortDirection $dir): callable
-    {
-        $sign = $dir === SortDirection::Asc ? 1 : -1;
-
-        return static function (Entry $a, Entry $b) use ($field, $sign): int {
-            $cmp = match ($field) {
-                SortField::Name => strcmp($a->name, $b->name),
-                SortField::Time => $a->mtime <=> $b->mtime,
-                SortField::Size => $a->size <=> $b->size,
-                SortField::Type => strcmp($a->mime, $b->mime),
-            };
-            return $cmp * $sign;
-        };
     }
 }

@@ -6,6 +6,8 @@ namespace Contenir\Storage;
 
 use DateTimeImmutable;
 
+use function str_starts_with;
+
 /**
  * A single item returned by StorageInterface::list() or ::store().
  *
@@ -26,6 +28,9 @@ use DateTimeImmutable;
  */
 final class Entry
 {
+    /**
+     * @mago-expect lint:excessive-parameter-list Published value-object constructor, called with named arguments.
+     */
     public function __construct(
         public readonly string $id,
         public readonly string $name,
@@ -35,8 +40,7 @@ final class Entry
         public readonly DateTimeImmutable $mtime,
         public readonly string $mime,
         public readonly ?ImageMeta $image = null,
-    ) {
-    }
+    ) {}
 
     public function isFile(): bool
     {

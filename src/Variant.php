@@ -18,7 +18,11 @@ namespace Contenir\Storage;
  */
 final class Variant
 {
-    /** @param array<int, string> $formats Output extensions without leading dot, e.g. ['avif', 'webp']. */
+    /**
+     * @param array<int, string> $formats Output extensions without leading dot, e.g. ['avif', 'webp'].
+     *
+     * @mago-expect lint:excessive-parameter-list Published value-object constructor, called with named arguments.
+     */
     public function __construct(
         public readonly string $name,
         public readonly int $width,
@@ -26,8 +30,7 @@ final class Variant
         public readonly VariantFit $fit = VariantFit::Cover,
         public readonly array $formats = [],
         public readonly ?int $quality = null,
-    ) {
-    }
+    ) {}
 
     /**
      * Formats to materialise, always including the source extension.
@@ -43,6 +46,6 @@ final class Variant
      */
     public function targetFormats(): array
     {
-        return $this->formats === [] ? [null] : [...$this->formats, null];
+        return [] === $this->formats ? [null] : [...$this->formats, null];
     }
 }

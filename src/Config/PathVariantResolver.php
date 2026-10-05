@@ -4,6 +4,18 @@ declare(strict_types=1);
 
 namespace Contenir\Storage\Config;
 
+use function array_combine;
+use function array_keys;
+use function array_map;
+use function array_unique;
+use function array_values;
+use function in_array;
+use function ltrim;
+use function preg_replace;
+use function rtrim;
+use function str_starts_with;
+use function strlen;
+
 /**
  * Resolves which variant families a stored path owns.
  *
@@ -20,7 +32,7 @@ namespace Contenir\Storage\Config;
 final class PathVariantResolver
 {
     /** Path key declaring families owned by every path. */
-    public const WILDCARD = '*';
+    public const string WILDCARD = '*';
 
     /** @var array<string, list<string>> Normalised base path => owned family names. */
     private readonly array $paths;
@@ -29,23 +41,55 @@ final class PathVariantResolver
     private readonly array $universal;
 
     /**
-     * @param array<string, list<string>> $paths Base path => family names it owns.
-     *                                            The '*' key declares families
-     *                                            owned by every path.
+     * @param array<array-key, list<string>> $paths Base path => family names it owns.
+     *                                               The '*' key declares families
+     *                                               owned by every path.
      */
     public function __construct(array $paths)
     {
-        $universal  = array_values($paths[self::WILDCARD] ?? []);
-        $normalised = [];
-        foreach ($paths as $base => $families) {
-            if ((string) $base === self::WILDCARD) {
-                continue;
-            }
-            $normalised[self::normalise((string) $base)] = array_values($families);
-        }
+        $universal = $paths[self::WILDCARD] ?? [];
+        unset($paths[self::WILDCARD]);
 
-        $this->paths     = $normalised;
+        $bases = array_map(
+            static fn(int|string $base): string => self::normalise((string) $base),
+            array_keys($paths),
+        );
+
+        $this->paths     = array_combine($bases, array_values($paths));
         $this->universal = array_values(array_unique($universal));
+    }
+
+    /**
+     * Map a variant name to its owning family: a compiled rung `<family>-<width>`
+     * or `<family>-x<height>` strips to `<family>`; anything else (a bare family,
+     * or a flat variant like `admin-thumb`) is already its own family.
+     */
+    public static function family(string $variant): string
+    {
+        return (
+            preg_replace(
+                pattern: '/-(?:\d+|x\d+)$/',
+                replacement: '',
+                subject: $variant,
+            ) ?? $variant
+        );
+    }
+
+    private static function normalise(string $path): string
+    {
+        $path = '/' . ltrim($path, characters: '/');
+
+        return '/' === $path ? '/' : rtrim($path, characters: '/');
+    }
+
+    /**
+     * Whether $path owns the family behind $variant. $variant may be a bare
+     * family (`gallery`), a compiled rung (`gallery-480`), or a universal
+     * variant (`admin-thumb`).
+     */
+    public function allows(string $path, string $variant): bool
+    {
+        return in_array(self::family($variant), $this->familiesFor($path), strict: true);
     }
 
     /**
@@ -58,29 +102,19 @@ final class PathVariantResolver
     {
         $path = self::normalise($path);
 
-        $bestKey = null;
+        $owned      = [];
+        $bestLength = -1;
         foreach ($this->paths as $base => $families) {
-            if ($path !== $base && ! str_starts_with($path, $base . '/')) {
+            $prefix = '/' === $base ? '/' : "{$base}/";
+            if ($path !== $base && ! str_starts_with($path, $prefix) || strlen($base) <= $bestLength) {
                 continue;
             }
-            if ($bestKey === null || strlen($base) > strlen($bestKey)) {
-                $bestKey = $base;
-            }
+
+            $owned      = $families;
+            $bestLength = strlen($base);
         }
 
-        $owned = $bestKey === null ? [] : $this->paths[$bestKey];
-
         return array_values(array_unique([...$owned, ...$this->universal]));
-    }
-
-    /**
-     * Whether $path owns the family behind $variant. $variant may be a bare
-     * family (`gallery`), a compiled rung (`gallery-480`), or a universal
-     * variant (`admin-thumb`).
-     */
-    public function allows(string $path, string $variant): bool
-    {
-        return in_array(self::family($variant), $this->familiesFor($path), true);
     }
 
     /**
@@ -90,23 +124,6 @@ final class PathVariantResolver
      */
     public function isConfigured(): bool
     {
-        return $this->paths !== [] || $this->universal !== [];
-    }
-
-    /**
-     * Map a variant name to its owning family: a compiled rung `<family>-<width>`
-     * or `<family>-x<height>` strips to `<family>`; anything else (a bare family,
-     * or a flat variant like `admin-thumb`) is already its own family.
-     */
-    public static function family(string $variant): string
-    {
-        return preg_replace('/-(?:\d+|x\d+)$/', '', $variant) ?? $variant;
-    }
-
-    private static function normalise(string $path): string
-    {
-        $path = '/' . ltrim($path, '/');
-
-        return $path === '/' ? '/' : rtrim($path, '/');
+        return [] !== $this->paths || [] !== $this->universal;
     }
 }

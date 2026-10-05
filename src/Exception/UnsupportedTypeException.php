@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Contenir\Storage\Exception;
 
+use function sprintf;
+
 /**
  * Raised when an upload's type cannot be detected from its bytes, or when the
  * detected type is not in the resolver's canonical allowlist. The store path

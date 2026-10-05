@@ -6,6 +6,4 @@ namespace Contenir\Storage\Exception;
 
 use RuntimeException;
 
-class StorageException extends RuntimeException
-{
-}
+class StorageException extends RuntimeException {}

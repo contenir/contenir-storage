@@ -1,0 +1,25 @@
+# contenir/storage
+
+> Framework-agnostic asset storage for Contenir CMS: local, S3-compatible and Cloudflare-transform backends behind one StorageInterface, with named image variants. PHP 8.3+.
+
+Key facts for code generation:
+
+- Build backends from config with `StorageConfig::fromArray($config['storage'], new ImageResizer(), $webRoot)`; use `$manager->primary()` or `$manager->get('r2')`.
+- Paths are relative to the storage root, with no leading slash: `asset/news/photo.jpg`.
+- `store(UploadInput::fromFilesArray($_FILES['f']), 'asset/news')` names the file from its detected type (`Holiday.JPG` with PNG bytes becomes `holiday.png`) and returns an `Entry`.
+- `url($path, 'card')` returns null when the variant is not materialised; `variantUrls($path, 'card')` returns `['avif' => …, 'source' => …]` without I/O; `thumbnailUrl()` uses the `admin-thumb` variant.
+- S3 variants are sibling keys `photo__card.avif`; local variants live at `_variant/card/photo.jpg`.
+- A `dimensions` ladder named `card` produces variants `card-320`, `card-480`…; `storage.paths` decides which families a path owns.
+- Optional capabilities: `MissingVariantsReporterInterface`, `BulkDeleteInterface`, `OnDemandVariantGeneratorInterface` (S3 only).
+- Use `InMemoryStorage` and `StubImageResizer` in tests.
+
+## Docs
+
+- [Backends](docs/backends.md)
+- [Configuration](docs/configuration.md)
+- [Variants](docs/variants.md)
+- [Uploads](docs/uploads.md)
+- [Image resizing](docs/image-resizing.md)
+- [Backfill and bulk operations](docs/backfill.md)
+- [Upgrade guide](UPGRADE-2.0.md)
+- [Changelog](CHANGELOG.md)
