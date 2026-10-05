@@ -1,5 +1,5 @@
 {
-    "name": "contenir/storage",
+    "name": "contenir/contenir-storage",
     "description": "Framework-agnostic asset storage for Contenir CMS — local, S3-compatible, and Cloudflare Images adapters with a shared variant pipeline.",
     "type": "library",
     "license": "MIT",
@@ -19,6 +19,9 @@
     "suggest": {
         "ext-imagick": "Preferred by ImageResizer for variant generation; the magick/convert CLI is used otherwise.",
         "league/flysystem-aws-s3-v3": "Required by StorageConfig to build s3 and cloudflare-images backends."
+    },
+    "replace": {
+        "contenir/storage": "self.version"
     },
     "autoload": {
         "psr-4": {
@@ -62,7 +65,7 @@
     },
     "extra": {
         "branch-alias": {
-            "dev-main": "2.1.x-dev"
+            "dev-main": "2.2.x-dev"
         }
     },
     "minimum-stability": "dev",
