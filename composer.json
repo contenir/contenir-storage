@@ -49,7 +49,7 @@
         "test": "phpunit --colors=always --testsuite unit",
         "test-integration": "phpunit --colors=always --testsuite integration",
         "test-coverage": "phpunit --colors=always --coverage-clover clover.xml",
-        "mutation-test": "infection"
+        "mutation-test": "infection --show-mutations=max"
     },
     "config": {
         "platform": {
