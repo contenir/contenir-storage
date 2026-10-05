@@ -1,7 +1,9 @@
-# contenir/storage
+# contenir/contenir-storage
 
-[![Continuous Integration](https://github.com/contenir/storage/actions/workflows/continuous-integration.yml/badge.svg)](https://github.com/contenir/storage/actions/workflows/continuous-integration.yml)
-[![codecov](https://codecov.io/gh/contenir/storage/graph/badge.svg)](https://codecov.io/gh/contenir/storage)
+Formerly `contenir/storage`; the old package is abandoned in favour of this one.
+
+[![Continuous Integration](https://github.com/contenir/contenir-storage/actions/workflows/continuous-integration.yml/badge.svg)](https://github.com/contenir/contenir-storage/actions/workflows/continuous-integration.yml)
+[![codecov](https://codecov.io/gh/contenir/contenir-storage/graph/badge.svg)](https://codecov.io/gh/contenir/contenir-storage)
 
 Framework-agnostic asset storage for [Contenir CMS](https://github.com/contenir).
 
@@ -29,7 +31,7 @@ image variants (thumbnails, responsive ladders, AVIF/WebP siblings).
 ## Install
 
 ```bash
-composer require contenir/storage
+composer require contenir/contenir-storage
 ```
 
 Add `league/flysystem-aws-s3-v3` when you use an S3-compatible bucket:

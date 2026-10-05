@@ -10,7 +10,7 @@ gain native types, and four bugs are fixed in ways that can change output.
 | psr/log | ^1.1 \|\| ^2.0 \|\| ^3.0 | unchanged |
 
 ```bash
-composer require contenir/storage:^2.0
+composer require contenir/contenir-storage:^2.0
 ```
 
 Projects that must stay on PHP 8.1 or 8.2 can keep using `^0.6`, which is
@@ -136,3 +136,15 @@ remove the entry; `'*'` remains the way to grant families to every path.
 
 `StorageConfig` skips array or object entries in `paths.*.variants` and
 `variants.*.formats`. 0.x cast them to the string `"Array"` with a warning.
+
+## Package renamed in 2.2
+
+From 2.2, the package is published as `contenir/contenir-storage`. It declares
+`replace` for `contenir/storage`, so the two can never be installed together.
+Switch the requirement:
+
+```bash
+composer remove contenir/storage && composer require contenir/contenir-storage:^2.2
+```
+
+No code changes are needed: namespaces and classes are unchanged.

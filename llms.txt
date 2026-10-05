@@ -1,4 +1,4 @@
-# contenir/storage
+# contenir/contenir-storage
 
 > Framework-agnostic asset storage for Contenir CMS: local, S3-compatible and Cloudflare-transform backends behind one StorageInterface, with named image variants. PHP 8.3+.
 

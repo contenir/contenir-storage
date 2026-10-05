@@ -4,10 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [2.1.2] - Unreleased
+## [2.2.0] - Unreleased
 
 ### Changed
 
+- Renamed from `contenir/storage` to `contenir/contenir-storage`. The package
+  declares `replace` for the old name; require `contenir/contenir-storage`
+  instead. See [UPGRADE-2.0.md](UPGRADE-2.0.md).
 - Removed dead code that only Infection exclusions kept covered; behaviour is
   unchanged:
   - the unknown-variant check in `variantUrls()` on `CloudflareImages`,
