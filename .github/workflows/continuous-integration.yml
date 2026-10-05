@@ -6,13 +6,14 @@ on:
 
 jobs:
   qa:
-    uses: contenir/contenir-qa-tools/.github/workflows/continuous-integration.yml@0.1.x
+    uses: contenir/contenir-qa-tools/.github/workflows/continuous-integration.yml@ci/apt-packages
     secrets: inherit
     with:
       php-versions: '["8.3", "8.4", "8.5"]'
       run-integration: true
       enable-codecov: true
       coverage-php-version: "8.4"
+      apt-packages: "imagemagick"
       enable-infection: true
       min-msi: "95"
       min-covered-msi: "95"

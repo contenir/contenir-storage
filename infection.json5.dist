@@ -29,7 +29,10 @@
                 "\\$sign = SortDirection::Asc === \\$dir \\? 1 : -1;",
                 // The pattern's groups always participate in a match, so `?? 0` never applies.
                 "\\$width\\s+= \\(int\\) \\(\\$m\\[1\\] \\?\\? 0\\);",
-                "\\$height = \\(int\\) \\(\\$m\\[2\\] \\?\\? 0\\);"
+                "\\$height = \\(int\\) \\(\\$m\\[2\\] \\?\\? 0\\);",
+                // The blur factor leaves the pinned Lanczos output unchanged (see DecrementInteger).
+                "blur: 1,",
+                "\\$image->resizeImage\\(\\$width, \\$height, Imagick::FILTER_LANCZOS, blur: 1, bestfit: true\\);"
             ]
         },
         "DecrementInteger": {
@@ -43,7 +46,11 @@
                 // exec() always overwrites the exit code it is handed.
                 "\\$exit\\s+= 0;",
                 // Imagick treats any radius <= 0 as "derive it from sigma".
-                "radius: 0,"
+                "radius: 0,",
+                // The blur factor leaves the pinned Lanczos output unchanged (Imagick ignores it
+                // against ImageMagick 7, and it shows no pixel difference against 6).
+                "blur: 1,",
+                "\\$image->resizeImage\\(\\$width, \\$height, Imagick::FILTER_LANCZOS, blur: 1, bestfit: true\\);"
             ]
         },
         "Division": {
