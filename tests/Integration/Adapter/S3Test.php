@@ -39,6 +39,7 @@ use function file_get_contents;
 use function file_put_contents;
 use function get_resources;
 use function glob;
+use function ini_set;
 use function md5;
 use function random_bytes;
 use function sort;
@@ -703,21 +704,20 @@ final class S3Test extends TestCase
         $backend->rename('docs/a.txt', 'docs/b.txt');
     }
 
+    /**
+     * The adapter's exception trace keeps the stream it was handed alive for as
+     * long as the caller holds the failure, so the upload must close it itself.
+     * Traces only carry arguments when zend.exception_ignore_args is off.
+     *
+     * @mago-expect lint:no-ini-set The setting under test has no other switch; it is restored in finally.
+     */
     #[Test]
-    public function storeClosesTheUploadStream(): void
+    public function storeClosesTheUploadStreamWhileTheWriteFailureIsStillHeld(): void
     {
-        $source  = $this->writeFile('a.txt', 'abc');
-        $backend = $this->backendOn(new FailingFilesystem());
-        $before  = count(get_resources('stream'));
-
-        $backend->store(new UploadInput($source, 'a.txt'), 'docs');
-
-        static::assertCount($before, get_resources('stream'));
-    }
-
-    #[Test]
-    public function storeClosesTheUploadStreamWhenTheWriteFails(): void
-    {
+        $previous = ini_set(
+            option: 'zend.exception_ignore_args',
+            value: '0',
+        );
         $source  = $this->writeFile('a.txt', 'abc');
         $backend = $this->backendOn((new FailingFilesystem())->failOn('writeStream', 'docs/a.txt'));
         $before  = count(get_resources('stream'));
@@ -726,10 +726,14 @@ final class S3Test extends TestCase
             $backend->store(new UploadInput($source, 'a.txt'), 'docs');
             static::fail('An upload that cannot be written must be reported.');
         } catch (WriteException $e) {
+            static::assertCount($before, get_resources('stream'));
             static::assertStringContainsString('Failed writing "docs/a.txt"', $e->getMessage());
+        } finally {
+            ini_set(
+                option: 'zend.exception_ignore_args',
+                value: (string) $previous,
+            );
         }
-
-        static::assertCount($before, get_resources('stream'));
     }
 
     #[Test]

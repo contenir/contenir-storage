@@ -17,6 +17,7 @@ use PHPUnit\Framework\TestCase;
 use function chmod;
 use function exec;
 use function extension_loaded;
+use function file;
 use function fileperms;
 use function filesize;
 use function getenv;
@@ -27,6 +28,8 @@ use function putenv;
 use function sprintf;
 use function symlink;
 use function umask;
+
+use const FILE_IGNORE_NEW_LINES;
 
 /**
  * Exercises ImageResizer against both a real ImageMagick binary and the
@@ -53,6 +56,25 @@ final class ImageResizerTest extends TestCase
         return [
             'imagick extension' => [true],
             'CLI binary'        => [false],
+        ];
+    }
+
+    /**
+     * @return array<string, array{0: int, 1: int, 2: VariantFit, 3: list<string>}>
+     */
+    public static function cliGeometryProvider(): array
+    {
+        return [
+            'cover'               => [
+                40,
+                20,
+                VariantFit::Cover,
+                ['-resize', '40x20^', '-gravity', 'center', '-extent', '40x20'],
+            ],
+            'contain'             => [40, 20, VariantFit::Contain, ['-resize', '40x20']],
+            'contain width only'  => [40, 0, VariantFit::Contain, ['-resize', '40x']],
+            'contain height only' => [0, 20, VariantFit::Contain, ['-resize', 'x20']],
+            'fill'                => [40, 20, VariantFit::Fill, ['-resize', '40x20!']],
         ];
     }
 
@@ -198,6 +220,59 @@ final class ImageResizerTest extends TestCase
         putenv("PATH={$this->path('bin')}");
 
         static::assertSame($magick, (new ImageResizer())->binaryPath());
+    }
+
+    /**
+     * @param list<string> $geometry
+     */
+    #[Test]
+    #[DataProvider('cliGeometryProvider')]
+    public function drivesTheCliWithTheGeometryForTheFit(
+        int $width,
+        int $height,
+        VariantFit $fit,
+        array $geometry,
+    ): void {
+        $bin = $this->writeFile(
+            'bin/fake-magick',
+            "#!/bin/sh\nprintf '%s\\n' \"\$@\" > \"\$(dirname \"\$0\")/args\"\nfor last; do :; done\n: > \"\$last\"\n",
+        );
+        chmod($bin, permissions: 0o755);
+        $source = $this->writePng('source.png', 10, 10);
+        $dest   = $this->path('out.png');
+
+        (new ImageResizer(
+            binaryPath: $bin,
+            useExtension: false,
+        ))->resize($source, $dest, $width, $height, $fit);
+
+        static::assertSame(
+            [
+                $source,
+                '-background',
+                'none',
+                '-colorspace',
+                'sRGB',
+                '-strip',
+                ...$geometry,
+                '-unsharp',
+                '0x0.75',
+                '-quality',
+                '85',
+                $dest,
+            ],
+            file($this->path('bin/args'), FILE_IGNORE_NEW_LINES),
+        );
+    }
+
+    #[Test]
+    public function failsForAFormatNoBackendSupports(): void
+    {
+        $source = $this->writePng('source.png', 10, 10);
+
+        $this->expectException(WriteException::class);
+        $this->expectExceptionMessage('No ImageMagick backend available for "NOSUCHFORMAT" output');
+        (new ImageResizer(binaryPath: ''))->resize($source, $this->path('out.nosuchformat'), 10, 10);
     }
 
     #[Test]
