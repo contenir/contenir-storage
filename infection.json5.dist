@@ -41,7 +41,9 @@
                 "\\$width\\s+= \\(int\\) \\(\\$m\\[1\\] \\?\\? 0\\);",
                 "\\$height = \\(int\\) \\(\\$m\\[2\\] \\?\\? 0\\);",
                 // exec() always overwrites the exit code it is handed.
-                "\\$exit\\s+= 0;"
+                "\\$exit\\s+= 0;",
+                // Imagick treats any radius <= 0 as "derive it from sigma".
+                "radius: 0,"
             ]
         },
         "Division": {
