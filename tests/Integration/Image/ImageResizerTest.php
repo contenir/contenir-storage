@@ -29,6 +29,7 @@ use function fileperms;
 use function filesize;
 use function getenv;
 use function getimagesize;
+use function implode;
 use function is_executable;
 use function mkdir;
 use function putenv;
@@ -561,23 +562,27 @@ final class ImageResizerTest extends TestCase
     }
 
     #[Test]
-    public function probesKnownInstallPathsWhenNothingIsOnThePath(): void
+    public function probesTheCommonInstallLocationsByDefault(): void
     {
-        $which = exec('command -v which');
-        mkdir($this->path('bin'));
-        symlink((string) $which, $this->path('bin/which'));
-        putenv("PATH={$this->path('bin')}");
+        static::assertSame(
+            [
+                '/usr/local/bin/magick',
+                '/usr/bin/magick',
+                '/opt/homebrew/bin/magick',
+                '/usr/local/bin/convert',
+                '/usr/bin/convert',
+            ],
+            ImageResizer::DEFAULT_BINARY_CANDIDATES,
+        );
+    }
 
-        $resizer = new ImageResizer();
+    #[Test]
+    public function probesTheDefaultInstallPathsWhenNoneAreGiven(): void
+    {
+        $this->hideImageMagickFromThePath();
 
         $expected = null;
-        foreach ([
-            '/usr/local/bin/magick',
-            '/usr/bin/magick',
-            '/opt/homebrew/bin/magick',
-            '/usr/local/bin/convert',
-            '/usr/bin/convert',
-        ] as $candidate) {
+        foreach (ImageResizer::DEFAULT_BINARY_CANDIDATES as $candidate) {
             if (! is_executable($candidate)) {
                 continue;
             }
@@ -586,7 +591,27 @@ final class ImageResizerTest extends TestCase
             break;
         }
 
-        static::assertSame($expected, $resizer->binaryPath());
+        static::assertSame($expected, (new ImageResizer())->binaryPath());
+    }
+
+    #[Test]
+    public function probesTheGivenInstallPathsInOrderWhenNothingIsOnThePath(): void
+    {
+        $this->hideImageMagickFromThePath();
+        $this->writeFile('opt/not-executable', "#!/bin/sh\n");
+        $first  = $this->writeFile('opt/first', "#!/bin/sh\n");
+        $second = $this->writeFile('opt/second', "#!/bin/sh\n");
+        chmod($first, permissions: 0o755);
+        chmod($second, permissions: 0o755);
+
+        $resizer = new ImageResizer(binaryCandidates: [
+            $this->path('opt/missing'),
+            $this->path('opt/not-executable'),
+            $first,
+            $second,
+        ]);
+
+        static::assertSame($first, $resizer->binaryPath());
     }
 
     #[Test]
@@ -695,23 +720,37 @@ final class ImageResizerTest extends TestCase
         return [$info[0], $info[1]];
     }
 
+    /**
+     * Leave only `which` on the PATH, so discovery finds no magick/convert there.
+     */
+    private function hideImageMagickFromThePath(): void
+    {
+        $which = exec('command -v which');
+        mkdir($this->path('bin'));
+        symlink((string) $which, $this->path('bin/which'));
+        putenv("PATH={$this->path('bin')}");
+    }
+
     private function makeResizer(bool $useExtension): ImageResizer
     {
         return new ImageResizer(useExtension: $useExtension);
     }
 
-    private function rgbaPixels(string $path): array
+    /**
+     * One line of comma-separated RGBA bytes, so a mismatch diffs cheaply.
+     */
+    private function rgbaPixels(string $path): string
     {
         $image = new Imagick($path);
 
-        return $image->exportImagePixels(
+        return implode(',', $image->exportImagePixels(
             0,
             0,
             $image->getImageWidth(),
             $image->getImageHeight(),
             'RGBA',
             Imagick::PIXEL_CHAR,
-        );
+        ));
     }
 
     /**

@@ -53,6 +53,20 @@ use const PATHINFO_EXTENSION;
  */
 final class ImageResizer implements ImageResizerInterface
 {
+    /**
+     * Install locations probed, in order, when neither `magick` nor `convert`
+     * is on the PATH.
+     *
+     * @var list<non-empty-string>
+     */
+    public const array DEFAULT_BINARY_CANDIDATES = [
+        '/usr/local/bin/magick',
+        '/usr/bin/magick',
+        '/opt/homebrew/bin/magick',
+        '/usr/local/bin/convert',
+        '/usr/bin/convert',
+    ];
+
     private readonly ?string $binaryPath;
 
     /** @var bool|null Explicit backend override for callers/tests; null defers to per-call format support. */
@@ -69,12 +83,19 @@ final class ImageResizer implements ImageResizerInterface
      *                                  the CLI-binary path (false) for every
      *                                  call. When null (the default), decided
      *                                  per call from real format support.
+     * @param list<non-empty-string>|null $binaryCandidates Install locations
+     *                                  probed, in order, when discovery finds
+     *                                  nothing on the PATH. Defaults to
+     *                                  {@see self::DEFAULT_BINARY_CANDIDATES}.
      */
-    public function __construct(?string $binaryPath = null, ?bool $useExtension = null)
-    {
+    public function __construct(
+        ?string $binaryPath = null,
+        ?bool $useExtension = null,
+        ?array $binaryCandidates = null,
+    ) {
         $this->forcedUseExtension = $useExtension;
         $this->binaryPath         = match ($binaryPath) {
-            null    => self::tryDiscoverBinary(),
+            null    => self::tryDiscoverBinary($binaryCandidates ?? self::DEFAULT_BINARY_CANDIDATES),
             ''      => null,
             default => $binaryPath,
         };
@@ -85,7 +106,10 @@ final class ImageResizer implements ImageResizerInterface
         return '' !== $format && in_array($format, (new Imagick())->queryFormats($format), strict: true);
     }
 
-    private static function tryDiscoverBinary(): ?string
+    /**
+     * @param list<non-empty-string> $candidates
+     */
+    private static function tryDiscoverBinary(array $candidates): ?string
     {
         foreach (['magick', 'convert'] as $binary) {
             $found = exec("which {$binary}");
@@ -94,13 +118,6 @@ final class ImageResizer implements ImageResizerInterface
             }
         }
 
-        $candidates = [
-            '/usr/local/bin/magick',
-            '/usr/bin/magick',
-            '/opt/homebrew/bin/magick',
-            '/usr/local/bin/convert',
-            '/usr/bin/convert',
-        ];
         foreach ($candidates as $candidate) {
             if (is_executable($candidate)) {
                 return $candidate;

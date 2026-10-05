@@ -49,10 +49,7 @@
         "test": "phpunit --colors=always --testsuite unit",
         "test-integration": "phpunit --colors=always --testsuite integration",
         "test-coverage": "phpunit --colors=always --coverage-clover clover.xml",
-        "mutation-test": [
-            "MAGICK_THREAD_LIMIT=1 infection",
-            "sed -n '/^Timed Out mutants/,$p' infection.log #"
-        ]
+        "mutation-test": "infection"
     },
     "config": {
         "platform": {

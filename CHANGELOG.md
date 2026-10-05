@@ -8,7 +8,16 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Infection mutation testing in CI, MSI MSIPCT%.
+- Infection mutation testing in CI, MSI 100%.
+- `ImageResizer` takes an optional `binaryCandidates` list of install paths
+  to probe for the ImageMagick CLI; it defaults to the new
+  `ImageResizer::DEFAULT_BINARY_CANDIDATES`, the previous built-in list.
+
+### Fixed
+
+- The `imagick` backend could resize a one-sided `Contain` request a pixel
+  short of the given side (e.g. 70×40 at width 6 gave 5×3); it now matches
+  the CLI (6×3).
 
 ## [2.0.0] - Unreleased
 
