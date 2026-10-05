@@ -48,6 +48,11 @@ Contenir 2.x packages. See [UPGRADE-2.0.md](UPGRADE-2.0.md).
 - Separate unit (no I/O, in-memory bucket) and integration (real filesystem
   and ImageMagick) suites.
 
+### Licence
+
+- Still MIT. The copyright holder is now Contenir, and the permission notice
+  restores the missing "USE OR OTHER" wording.
+
 ### Removed
 
 - `squizlabs/php_codesniffer` and `phpcs.xml`, replaced by Mago via
