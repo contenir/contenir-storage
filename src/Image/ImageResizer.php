@@ -26,7 +26,6 @@ use function is_readable;
 use function is_writable;
 use function mkdir;
 use function pathinfo;
-use function round;
 use function sprintf;
 use function strtoupper;
 
@@ -218,25 +217,15 @@ final class ImageResizer implements ImageResizerInterface
     }
 
     /**
-     * Imagick::resizeImage() rejects 0 for either dimension, unlike the CLI's
-     * "Wx"/"xH" geometry strings — so when only one dimension is given, the
-     * missing one is derived from the source's own aspect ratio first, and the
-     * image is resized to that box exactly: bestfit would re-derive the given
-     * side from the rounded one and can land a pixel short of it.
+     * With both sides given, fit inside the box. With one side 0 (the CLI's
+     * "Wx"/"xH"), let Imagick derive the other from the source's aspect ratio:
+     * bestfit has to be off for that, as it rejects 0 — and deriving the side
+     * ourselves under bestfit re-derives the given side from the rounded one,
+     * which can land a pixel short of it.
      */
     private function resizeContain(Imagick $image, int $width, int $height): void
     {
-        if ($width > 0 && $height > 0) {
-            $image->resizeImage($width, $height, Imagick::FILTER_LANCZOS, blur: 1, bestfit: true);
-            return;
-        }
-
-        $sourceWidth  = $image->getImageWidth();
-        $sourceHeight = $image->getImageHeight();
-        $width        = $width > 0 ? $width : (int) round(($height * $sourceWidth) / $sourceHeight);
-        $height       = $height > 0 ? $height : (int) round(($width * $sourceHeight) / $sourceWidth);
-
-        $image->resizeImage($width, $height, Imagick::FILTER_LANCZOS, blur: 1, bestfit: false);
+        $image->resizeImage($width, $height, Imagick::FILTER_LANCZOS, blur: 1, bestfit: $width > 0 && $height > 0);
     }
 
     /**

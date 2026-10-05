@@ -41,7 +41,10 @@
                 "\\$width\\s+= \\(int\\) \\(\\$m\\[1\\] \\?\\? 0\\);",
                 "\\$height = \\(int\\) \\(\\$m\\[2\\] \\?\\? 0\\);",
                 // exec() always overwrites the exit code it is handed.
-                "\\$exit\\s+= 0;"
+                "\\$exit\\s+= 0;",
+                // ImageMagick sizes the unsharp kernel from sigma for any radius below
+                // MagickEpsilon, so -1 and 0 build the same kernel.
+                "radius: 0,"
             ]
         },
         "Multiplication": {
@@ -51,8 +54,8 @@
             ]
         },
         "UnwrapFinally": {
-            // stream_copy_to_stream() cannot be made to fail between two open streams,
-            // so the finally block only ever runs on the success path.
+            // Both streams are locals of copySourceToTemp(), so PHP releases them as a failed
+            // copy's exception unwinds; the finally block only closes them a moment earlier.
             "ignore": ["Contenir\\Storage\\Adapter\\S3::copySourceToTemp"]
         },
         "MethodCallRemoval": {
@@ -60,6 +63,10 @@
                 // Both handles are locals of copySourceToTemp(), so PHP closes them when it
                 // returns; the explicit close only makes that happen a few lines earlier.
                 "self::close\\(\\$(remote|local)\\);",
+                // Nothing in the Imagick pipeline pads, flattens or rotates, so the background
+                // colour is never read: extensionMatchesTheCliPipeline renders a translucent
+                // source byte-for-byte the same without it on ImageMagick 6 and 7.
+                "\\$image->setBackgroundColor\\(new ImagickPixel\\(color: 'transparent'\\)\\);",
                 // clear() only frees the wand's memory, which PHP releases when $image goes
                 // out of scope a line later; nothing written to disk depends on it.
                 "\\$image->clear\\(\\);"
