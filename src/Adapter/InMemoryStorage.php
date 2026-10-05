@@ -263,9 +263,6 @@ final class InMemoryStorage implements StorageInterface, MissingVariantsReporter
     #[Override]
     public function variantUrls(string $path, string $variantName): array
     {
-        if (! $this->variants->has($variantName)) {
-            throw new InvalidArgumentException(sprintf('Unknown variant "%s".', $variantName));
-        }
         $variant = $this->variants->get($variantName);
         $path    = $this->normalise($path);
 

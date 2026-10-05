@@ -142,12 +142,6 @@ final class PathResolver
                 replacement: '-',
                 subject: $basename,
             ) ?? $basename;
-        $value =
-            preg_replace(
-                pattern: '/-{2,}/',
-                replacement: '-',
-                subject: $value,
-            ) ?? $value;
         return strtolower($value);
     }
 

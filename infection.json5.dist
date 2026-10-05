@@ -14,15 +14,6 @@
     },
     "mutators": {
         "@default": true,
-        // VariantRegistry::get() throws the same InvalidArgumentException with the
-        // same message on the very next line, so dropping this `throw` changes nothing.
-        "Throw_": {
-            "ignore": [
-                "Contenir\\Storage\\Adapter\\CloudflareImages::variantUrls",
-                "Contenir\\Storage\\Adapter\\InMemoryStorage::variantUrls",
-                "Contenir\\Storage\\Adapter\\S3::variantUrls"
-            ]
-        },
         "IncrementInteger": {
             "ignoreSourceCodeByRegex": [
                 // usort() only reads the comparator's sign, so ±2 sorts exactly like ±1.
@@ -63,19 +54,9 @@
                 // Both handles are locals of copySourceToTemp(), so PHP closes them when it
                 // returns; the explicit close only makes that happen a few lines earlier.
                 "self::close\\(\\$(remote|local)\\);",
-                // Nothing in the Imagick pipeline pads, flattens or rotates, so the background
-                // colour is never read: extensionMatchesTheCliPipeline renders a translucent
-                // source byte-for-byte the same without it on ImageMagick 6 and 7.
-                "\\$image->setBackgroundColor\\(new ImagickPixel\\(color: 'transparent'\\)\\);",
                 // clear() only frees the wand's memory, which PHP releases when $image goes
                 // out of scope a line later; nothing written to disk depends on it.
                 "\\$image->clear\\(\\);"
-            ]
-        },
-        "ArrayItemRemoval": {
-            "ignoreSourceCodeByRegex": [
-                // The AWS SDK defaults the API version to "latest" when it is omitted.
-                "'version'\\s+=> 'latest',"
             ]
         },
         "CastString": {
@@ -95,13 +76,6 @@
                 // `(!is_dir && !mkdir) || !is_dir` differs only if mkdir() succeeds yet the
                 // directory is missing straight after, which cannot happen.
                 "&& ! is_dir\\(\\$destDir\\)"
-            ]
-        },
-        "Coalesce": {
-            "ignoreSourceCodeByRegex": [
-                // The first pass already collapses every run of non-word characters (dashes
-                // included) into one dash, so the dash-collapsing pass never changes the value.
-                "\\) \\?\\? \\$value;"
             ]
         }
     },
