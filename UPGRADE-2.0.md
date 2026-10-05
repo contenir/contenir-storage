@@ -6,7 +6,7 @@ gain native types, and four bugs are fixed in ways that can change output.
 | | 0.x | 2.0 |
 | --- | --- | --- |
 | PHP | ^8.1 | 8.3, 8.4 or 8.5 |
-| league/flysystem | ^3.0 | ^3.0 |
+| league/flysystem | ^3.0 | ^3.29 (the first release clean under PHP 8.4) |
 | psr/log | ^1.1 \|\| ^2.0 \|\| ^3.0 | unchanged |
 
 ```bash

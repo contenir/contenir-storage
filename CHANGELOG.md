@@ -13,6 +13,8 @@ Contenir 2.x packages. See [UPGRADE-2.0.md](UPGRADE-2.0.md).
 ### Changed
 
 - Requires PHP 8.3, 8.4 or 8.5. PHP 8.1 and 8.2 are no longer supported.
+- Requires `league/flysystem` ^3.29, the first release free of PHP 8.4
+  implicit-nullable deprecations.
 - Class constants are typed (`StorageInterface::THUMBNAIL_VARIANT`,
   `StorageManager::DEFAULT_PROFILE`, `PathVariantResolver::WILDCARD`).
 - The `Thumbnail` trait declares the `url()` method it calls as abstract.

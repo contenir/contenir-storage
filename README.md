@@ -21,7 +21,7 @@ image variants (thumbnails, responsive ladders, AVIF/WebP siblings).
 ## Requirements
 
 - PHP 8.3, 8.4 or 8.5
-- `league/flysystem` 3.x
+- `league/flysystem` 3.29 or later
 - ImageMagick, through the `imagick` extension or the `magick`/`convert` CLI,
   for variant generation
 - `league/flysystem-aws-s3-v3` for the `s3` and `cloudflare-images` backends
