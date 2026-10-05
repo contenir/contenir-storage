@@ -22,6 +22,7 @@ use function chmod;
 use function exec;
 use function extension_loaded;
 use function file;
+use function file_exists;
 use function file_get_contents;
 use function fileperms;
 use function filesize;
@@ -530,6 +531,20 @@ final class ImageResizerTest extends TestCase
     public function keepsAnExplicitBinaryPath(): void
     {
         static::assertSame('/opt/magick', (new ImageResizer(binaryPath: '/opt/magick'))->binaryPath());
+    }
+
+    #[Test]
+    public function prefersTheExtensionOverTheCliWhenItSupportsTheFormat(): void
+    {
+        $bin = $this->writeFile(
+            'bin/fake-magick',
+            "#!/bin/sh\n: > \"\$(dirname \"\$0\")/called\"\nfor last; do :; done\n: > \"\$last\"\n",
+        );
+        chmod($bin, permissions: 0o755);
+
+        (new ImageResizer(binaryPath: $bin))->resize($this->writePng('source.png', 8, 8), $this->path('out.png'), 4, 4);
+
+        static::assertSame(! extension_loaded('imagick'), file_exists($this->path('bin/called')));
     }
 
     #[Test]
