@@ -9,7 +9,6 @@ use Contenir\Storage\Internal\Warnings;
 use Contenir\Storage\VariantFit;
 use Imagick;
 use ImagickException;
-use ImagickPixel;
 use InvalidArgumentException;
 use Override;
 
@@ -299,7 +298,6 @@ final class ImageResizer implements ImageResizerInterface
     ): void {
         try {
             $image = new Imagick($sourcePath);
-            $image->setBackgroundColor(new ImagickPixel(color: 'transparent'));
             $image->transformImageColorspace(Imagick::COLORSPACE_SRGB);
             $image->stripImage();
 

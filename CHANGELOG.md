@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.1.2] - Unreleased
+
+### Changed
+
+- Removed dead code that only Infection exclusions kept covered; behaviour is
+  unchanged:
+  - the unknown-variant check in `variantUrls()` on `CloudflareImages`,
+    `InMemoryStorage` and `S3` (`VariantRegistry::get()` throws the same
+    `InvalidArgumentException` with the same message);
+  - `setBackgroundColor('transparent')` in the Imagick resize pipeline, which
+    nothing in the pipeline reads;
+  - `'version' => 'latest'` in the S3 client config, the AWS SDK default;
+  - the second, dash-collapsing pass in `PathResolver::sanitiseBasename()`,
+    since the first pass already turns each run of non-word characters into a
+    single dash.
+
 ## [2.1.1] - Unreleased
 
 ### Fixed

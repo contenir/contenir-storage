@@ -33,6 +33,28 @@ final class PathResolverTest extends TestCase
 
     private StubImageResizer $resizer;
 
+    /** @return array<string, array{0: string, 1: string}> */
+    public static function legacySlugProvider(): array
+    {
+        return [
+            'trailing punctuation'        => ['My File!', 'my-file-'],
+            'underscores and digits kept' => ['IMG_1234', 'img_1234'],
+            'run of spaces'               => ['Hello   World', 'hello-world'],
+            'runs of dashes'              => ['a--b---c', 'a-b-c'],
+            'leading and trailing dashes' => ['--Leading and trailing--', '-leading-and-trailing-'],
+            'leading and trailing spaces' => ['  spaced  ', '-spaced-'],
+            'mixed separators'            => ['a - b _ c . d', 'a-b-_-c-d'],
+            'repeated underscores kept'   => ['snake__case_', 'snake__case_'],
+            'dashes around an underscore' => ['x.-_-.y', 'x-_-y'],
+            'tab and newline'             => ["a\tb\nc", 'a-b-c'],
+            'only separators'             => ['!!!', '-'],
+            'empty'                       => ['', ''],
+            'accented latin'              => ['Café Menu', 'caf-menu'],
+            'accents beside dashes'       => ['Ünïcödé--Fïlé', '-n-c-d-f-l-'],
+            'non-latin script'            => ['日本語.jpg', '-jpg'],
+        ];
+    }
+
     /** @return array<string, array{0: string, 1: string, 2: string}> */
     public static function mimeExtensionProvider(): array
     {
@@ -288,13 +310,10 @@ final class PathResolverTest extends TestCase
     }
 
     #[Test]
-    public function sanitiseBasenameMatchesLegacyFilenameFilter(): void
+    #[DataProvider('legacySlugProvider')]
+    public function sanitiseBasenameMatchesLegacyFilenameFilter(string $basename, string $expected): void
     {
-        $resolver = $this->resolver();
-
-        static::assertSame('my-file-', $resolver->sanitiseBasename('My File!'));
-        static::assertSame('img_1234', $resolver->sanitiseBasename('IMG_1234'));
-        static::assertSame('hello-world', $resolver->sanitiseBasename('Hello   World'));
+        static::assertSame($expected, $this->resolver()->sanitiseBasename($basename));
     }
 
     protected function setUp(): void

@@ -248,7 +248,6 @@ final class StorageConfig
     private static function buildFlysystem(array $backend): Filesystem
     {
         $client = new S3Client([
-            'version'                 => 'latest',
             'region'                  => (string) ($backend['region'] ?? 'auto'),
             'endpoint'                => self::requireString($backend, 'endpoint'),
             'credentials'             => [
