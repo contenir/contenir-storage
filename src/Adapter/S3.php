@@ -701,13 +701,24 @@ final class S3 implements
             throw new WriteException(sprintf('Cannot open temp file "%s" for writing.', $sourcePath));
         }
 
+        /**
+         * The temp file is removed whenever the copy did not complete, whether
+         * stream_copy_to_stream() reported failure or threw, and only after
+         * both streams are closed.
+         */
+        $copied = false;
         try {
-            if (false === stream_copy_to_stream($remote, $local)) {
-                throw new WriteException(sprintf('Failed copying source "%s" to local temp.', $key));
-            }
+            $copied = false !== stream_copy_to_stream($remote, $local);
         } finally {
             self::close($remote);
             self::close($local);
+            if (! $copied) {
+                Warnings::suppress(unlink(...), $sourcePath);
+            }
+        }
+
+        if (! $copied) {
+            throw new WriteException(sprintf('Failed copying source "%s" to local temp.', $key));
         }
 
         return $sourcePath;

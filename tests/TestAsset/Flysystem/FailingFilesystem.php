@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Contenir\Storage\Tests\TestAsset\Flysystem;
 
+use Contenir\Storage\Tests\TestAsset\Stream\BrokenReadStream;
 use League\Flysystem\DirectoryListing;
 use League\Flysystem\FileAttributes;
 use League\Flysystem\Filesystem;
@@ -37,9 +38,23 @@ final class FailingFilesystem implements FilesystemOperator
     /** @var array<string, true> operation:location pairs that throw. */
     private array $failures = [];
 
+    /** @var array<string, bool> location => whether its read stream throws (true) or reports failure (false). */
+    private array $brokenStreams = [];
+
     public function __construct()
     {
         $this->inner = new Filesystem(new InMemoryFilesystemAdapter());
+    }
+
+    /**
+     * Open $location normally but hand back a stream whose reads fail
+     * part-way: throwing when $throws, otherwise reporting failure.
+     */
+    public function breakReadStreamOn(string $location, bool $throws): self
+    {
+        $this->brokenStreams[$location] = $throws;
+
+        return $this;
     }
 
     public function copy(string $source, string $destination, array $config = []): void
@@ -161,6 +176,9 @@ final class FailingFilesystem implements FilesystemOperator
     {
         if ($this->fails('readStream', $location)) {
             throw UnableToReadFile::fromLocation($location, 'read refused');
+        }
+        if (array_key_exists($location, $this->brokenStreams)) {
+            return $this->brokenStreams[$location] ? BrokenReadStream::throwing() : BrokenReadStream::failing();
         }
 
         return $this->inner->readStream($location);
