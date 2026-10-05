@@ -44,6 +44,27 @@
                 "\\$exit\\s+= 0;"
             ]
         },
+        "Division": {
+            "ignoreSourceCodeByRegex": [
+                // resizeImage() runs with bestfit, so an over-sized derived dimension is
+                // clamped by the given one and yields the same image.
+                "\\$(width|height)\\s+= \\$(width|height) > 0 \\? \\$(width|height) : \\(int\\) round\\(.*\\);"
+            ]
+        },
+        "RoundingFamily": {
+            "ignoreSourceCodeByRegex": [
+                // ceil() over-sizes the derived dimension, which bestfit clamps (see Division).
+                // floor() is pinned by containRoundsTheDerivedDimensionToTheNearestPixel, but a
+                // line-based ignore cannot keep it while dropping ceil().
+                "\\$(width|height)\\s+= \\$(width|height) > 0 \\? \\$(width|height) : \\(int\\) round\\(.*\\);"
+            ]
+        },
+        "LogicalOrAllSubExprNegation": {
+            "ignoreSourceCodeByRegex": [
+                // With both dimensions set the branch recomputes nothing, so entering it is harmless.
+                "if \\(\\$width <= 0 \\|\\| \\$height <= 0\\) \\{"
+            ]
+        },
         "Multiplication": {
             "ignoreSourceCodeByRegex": [
                 // $sign is ±1 and $cmp an integer, so dividing yields the same integer.
@@ -59,7 +80,11 @@
             "ignoreSourceCodeByRegex": [
                 // Both handles are locals of copySourceToTemp(), so PHP closes them when it
                 // returns; the explicit close only makes that happen a few lines earlier.
-                "self::close\\(\\$(remote|local)\\);"
+                "self::close\\(\\$(remote|local)\\);",
+                // No step of the Imagick pipeline pads or flattens, so the background colour
+                // is never read; clear() only frees memory the object releases anyway.
+                "\\$image->setBackgroundColor\\(new ImagickPixel\\(color: 'transparent'\\)\\);",
+                "\\$image->clear\\(\\);"
             ]
         },
         "ArrayItemRemoval": {

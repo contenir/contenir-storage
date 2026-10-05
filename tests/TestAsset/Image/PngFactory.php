@@ -28,6 +28,23 @@ final class PngFactory
         );
     }
 
+    /**
+     * The same black PNG carrying a tEXt "Comment" chunk, for asserting that
+     * metadata is stripped.
+     */
+    public static function bytesWithComment(int $width, int $height, string $comment): string
+    {
+        $row = "\0" . str_repeat("\0\0\0", $width);
+
+        return (
+            "\x89PNG\r\n\x1A\n"
+                . self::chunk('IHDR', pack('NNCCCCC', $width, $height, 8, 2, 0, 0, 0))
+                . self::chunk('tEXt', "Comment\0{$comment}")
+                . self::chunk('IDAT', (string) gzcompress(str_repeat($row, $height)))
+                . self::chunk('IEND', '')
+        );
+    }
+
     private static function chunk(string $type, string $data): string
     {
         return pack('N', strlen($data)) . $type . $data . pack('N', crc32($type . $data));

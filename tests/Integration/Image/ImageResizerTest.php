@@ -6,8 +6,12 @@ namespace Contenir\Storage\Tests\Integration\Image;
 
 use Contenir\Storage\Exception\WriteException;
 use Contenir\Storage\Image\ImageResizer;
+use Contenir\Storage\Tests\TestAsset\Image\PngFactory;
 use Contenir\Storage\Tests\Trait\TemporaryDirectoryTrait;
 use Contenir\Storage\VariantFit;
+use Imagick;
+use ImagickDraw;
+use ImagickPixel;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
@@ -18,6 +22,7 @@ use function chmod;
 use function exec;
 use function extension_loaded;
 use function file;
+use function file_get_contents;
 use function fileperms;
 use function filesize;
 use function getenv;
@@ -78,6 +83,31 @@ final class ImageResizerTest extends TestCase
         ];
     }
 
+    /**
+     * @return array<string, array{0: bool, 1: array{int, int}, 2: array{int, int}, 3: array{int, int}}>
+     */
+    public static function containRoundingProvider(): array
+    {
+        return [
+            'imagick extension, height only' => [true, [80, 60], [0, 26], [35, 26]],
+            'imagick extension, width only'  => [true, [60, 80], [26, 0], [26, 35]],
+            'CLI binary, height only'        => [false, [80, 60], [0, 26], [35, 26]],
+            'CLI binary, width only'         => [false, [60, 80], [26, 0], [26, 35]],
+        ];
+    }
+
+    /**
+     * @return array<string, array{VariantFit}>
+     */
+    public static function fitProvider(): array
+    {
+        return [
+            'cover'   => [VariantFit::Cover],
+            'contain' => [VariantFit::Contain],
+            'fill'    => [VariantFit::Fill],
+        ];
+    }
+
     #[Test]
     public function anEmptyBinaryPathDisablesTheCli(): void
     {
@@ -103,6 +133,19 @@ final class ImageResizerTest extends TestCase
         new ImageResizer();
         new ImageResizer(useExtension: true);
         new ImageResizer(useExtension: false);
+    }
+
+    #[Test]
+    #[DataProvider('backendProvider')]
+    public function containFitsInsideTheBox(bool $useExtension): void
+    {
+        $this->skipUnlessBackendAvailable($useExtension);
+        $source = $this->writePng('source.png', 800, 600);
+        $dest   = $this->path('out.png');
+
+        $this->makeResizer($useExtension)->resize($source, $dest, 400, 400, VariantFit::Contain);
+
+        static::assertSame([400, 300], $this->dimensions($dest));
     }
 
     #[Test]
@@ -133,6 +176,48 @@ final class ImageResizerTest extends TestCase
         [$width, $height] = $this->dimensions($dest);
         static::assertSame(400, $width);
         static::assertSame(300, $height);
+    }
+
+    /**
+     * @param array{int, int} $source
+     * @param array{int, int} $request
+     * @param array{int, int} $expected
+     */
+    #[Test]
+    #[DataProvider('containRoundingProvider')]
+    public function containRoundsTheDerivedDimensionToTheNearestPixel(
+        bool $useExtension,
+        array $source,
+        array $request,
+        array $expected,
+    ): void {
+        $this->skipUnlessBackendAvailable($useExtension);
+        $sourcePath = $this->writePng('source.png', $source[0], $source[1]);
+        $dest       = $this->path('out.png');
+
+        $this->makeResizer($useExtension)->resize($sourcePath, $dest, $request[0], $request[1], VariantFit::Contain);
+
+        static::assertSame($expected, $this->dimensions($dest));
+    }
+
+    #[Test]
+    #[DataProvider('backendProvider')]
+    public function convertsACmykSourceToSrgb(bool $useExtension): void
+    {
+        $this->skipUnlessBackendAvailable($useExtension);
+        $dest = $this->path('out.jpg');
+
+        $this->makeResizer($useExtension)->resize(
+            __DIR__ . '/../../TestAsset/Image/cmyk.jpg',
+            $dest,
+            4,
+            4,
+            VariantFit::Fill,
+        );
+
+        $info = getimagesize($dest);
+        static::assertIsArray($info);
+        static::assertSame(3, $info['channels'] ?? null);
     }
 
     #[Test]
@@ -262,6 +347,62 @@ final class ImageResizerTest extends TestCase
                 $dest,
             ],
             file($this->path('bin/args'), FILE_IGNORE_NEW_LINES),
+        );
+    }
+
+    /**
+     * Pins the extension backend's pixels to the pipeline the CLI runs
+     * (`-strip … -unsharp 0x0.75`): Lanczos resampling followed by the same
+     * unsharp mask, so both backends sharpen variants identically.
+     */
+    #[Test]
+    #[DataProvider('fitProvider')]
+    public function extensionSharpensLikeTheCliUnsharpMask(VariantFit $fit): void
+    {
+        $this->skipUnlessBackendAvailable(useExtension: true);
+        $source = $this->path('source.png');
+        $image  = new Imagick();
+        $image->newPseudoImage(80, 60, 'gradient:red-blue');
+        $draw = new ImagickDraw();
+        $draw->setFillColor(new ImagickPixel(color: 'white'));
+        $draw->rectangle(20, 20, 50, 40);
+        $image->drawImage($draw);
+        $image->writeImage("png:{$source}");
+        $dest = $this->path('out.png');
+
+        $this->makeResizer(useExtension: true)->resize($source, $dest, 40, 40, $fit);
+
+        $expected = new Imagick($source);
+        match ($fit) {
+            VariantFit::Cover   => $expected->cropThumbnailImage(40, 40),
+            VariantFit::Contain => $expected->resizeImage(40, 40, Imagick::FILTER_LANCZOS, blur: 1, bestfit: true),
+            VariantFit::Fill    => $expected->resizeImage(40, 40, Imagick::FILTER_LANCZOS, blur: 1, bestfit: false),
+        };
+        $expected->unsharpMaskImage(
+            radius: 0,
+            sigma: 0.75,
+            amount: 1,
+            threshold: 0.05,
+        );
+        $actual = new Imagick($dest);
+
+        static::assertSame(
+            $expected->exportImagePixels(
+                0,
+                0,
+                $expected->getImageWidth(),
+                $expected->getImageHeight(),
+                'RGB',
+                Imagick::PIXEL_CHAR,
+            ),
+            $actual->exportImagePixels(
+                0,
+                0,
+                $actual->getImageWidth(),
+                $actual->getImageHeight(),
+                'RGB',
+                Imagick::PIXEL_CHAR,
+            ),
         );
     }
 
@@ -466,6 +607,19 @@ final class ImageResizerTest extends TestCase
             binaryPath: '/nonexistent/magick',
             useExtension: false,
         ))->resize($source, $dest, 400, 400, VariantFit::Cover);
+    }
+
+    #[Test]
+    #[DataProvider('backendProvider')]
+    public function stripsMetadataFromTheOutput(bool $useExtension): void
+    {
+        $this->skipUnlessBackendAvailable($useExtension);
+        $source = $this->writeFile('source.png', PngFactory::bytesWithComment(20, 20, 'contenir-marker'));
+        $dest   = $this->path('out.png');
+
+        $this->makeResizer($useExtension)->resize($source, $dest, 10, 10, VariantFit::Fill);
+
+        static::assertStringNotContainsString('contenir-marker', (string) file_get_contents($dest));
     }
 
     #[Test]
