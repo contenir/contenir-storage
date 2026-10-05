@@ -9,7 +9,7 @@ use Contenir\Storage\Config\PathVariantResolver;
 use Contenir\Storage\Entry;
 use Contenir\Storage\Exception\NotFoundException;
 use Contenir\Storage\Exception\WriteException;
-use Contenir\Storage\Image\ImageResizer;
+use Contenir\Storage\Image\ImageResizerInterface;
 use Contenir\Storage\Image\StubImageResizer;
 use Contenir\Storage\ImageMeta;
 use Contenir\Storage\ListOptions;
@@ -534,7 +534,7 @@ final class S3Test extends TestCase
         $fs          = new Filesystem(new InMemoryFilesystemAdapter());
 
         $captured       = null;
-        $captureResizer = $this->createStub(ImageResizer::class);
+        $captureResizer = $this->createStub(ImageResizerInterface::class);
         $captureResizer->method('resize')
             ->willReturnCallback(
                 static function (string $sourcePath, string $destPath) use (&$captured): void {
@@ -723,7 +723,7 @@ final class S3Test extends TestCase
     #[Test]
     public function storeReportsAVariantFileThatTheResizerDidNotLeave(): void
     {
-        $resizer = $this->createStub(ImageResizer::class);
+        $resizer = $this->createStub(ImageResizerInterface::class);
         $resizer->method('resize')
             ->willReturnCallback(static function (string $source, string $dest): void {
                 unlink($dest);

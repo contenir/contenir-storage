@@ -8,7 +8,7 @@ use Aws\S3\S3Client;
 use Contenir\Storage\Adapter\CloudflareImages;
 use Contenir\Storage\Adapter\LocalFilesystem;
 use Contenir\Storage\Adapter\S3;
-use Contenir\Storage\Image\ImageResizer;
+use Contenir\Storage\Image\ImageResizerInterface;
 use Contenir\Storage\StorageManager;
 use Contenir\Storage\Variant;
 use Contenir\Storage\VariantFit;
@@ -70,7 +70,7 @@ final class StorageConfig
      * Build a manager with a single implicit local backend at $rootPath. Used
      * when no storage config is supplied so consumers keep working.
      */
-    public static function default(ImageResizer $resizer, string $rootPath): StorageManager
+    public static function default(ImageResizerInterface $resizer, string $rootPath): StorageManager
     {
         return self::fromArray(null, $resizer, $rootPath);
     }
@@ -82,8 +82,11 @@ final class StorageConfig
      *
      * @mago-expect analysis:mixed-assignment Storage config is untyped input; it is validated here.
      */
-    public static function fromArray(?array $config, ImageResizer $resizer, string $defaultRootPath): StorageManager
-    {
+    public static function fromArray(
+        ?array $config,
+        ImageResizerInterface $resizer,
+        string $defaultRootPath,
+    ): StorageManager {
         $backends  = self::backends($config);
         $primary   = self::primaryBackendKey($backends);
         $byBackend = self::variantsByBackend(self::section($config, 'variants'), $primary, $backends);
@@ -217,7 +220,7 @@ final class StorageConfig
     private static function buildCloudflareImages(
         array $backend,
         VariantRegistry $variants,
-        ImageResizer $resizer,
+        ImageResizerInterface $resizer,
     ): CloudflareImages {
         /**
          * The wrapped object store doesn't pre-generate variants — they resolve
@@ -268,7 +271,7 @@ final class StorageConfig
     private static function buildLocal(
         array $backend,
         VariantRegistry $variants,
-        ImageResizer $resizer,
+        ImageResizerInterface $resizer,
         string $defaultRootPath,
         PathVariantResolver $paths,
     ): LocalFilesystem {
@@ -291,7 +294,7 @@ final class StorageConfig
     private static function buildS3(
         array $backend,
         VariantRegistry $variants,
-        ImageResizer $resizer,
+        ImageResizerInterface $resizer,
         PathVariantResolver $paths,
     ): S3 {
         return new S3(

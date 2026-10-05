@@ -11,7 +11,8 @@ Key facts for code generation:
 - S3 variants are sibling keys `photo__card.avif`; local variants live at `_variant/card/photo.jpg`.
 - A `dimensions` ladder named `card` produces variants `card-320`, `card-480`…; `storage.paths` decides which families a path owns.
 - Optional capabilities: `MissingVariantsReporterInterface`, `BulkDeleteInterface`, `OnDemandVariantGeneratorInterface` (S3 only).
-- Use `InMemoryStorage` and `StubImageResizer` in tests.
+- Backends take an `ImageResizerInterface` (`new ImageResizer()` for ImageMagick). All concrete classes are final; extend through the interfaces.
+- Use `InMemoryStorage` and `StubImageResizer` in tests. Catch `Exception\StorageException` (abstract) for any storage failure.
 
 ## Docs
 

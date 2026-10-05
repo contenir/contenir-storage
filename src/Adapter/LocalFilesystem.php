@@ -10,7 +10,7 @@ use Contenir\Storage\Entry;
 use Contenir\Storage\Exception\InvalidPathException;
 use Contenir\Storage\Exception\NotFoundException;
 use Contenir\Storage\Exception\WriteException;
-use Contenir\Storage\Image\ImageResizer;
+use Contenir\Storage\Image\ImageResizerInterface;
 use Contenir\Storage\ImageMeta;
 use Contenir\Storage\Internal\Warnings;
 use Contenir\Storage\ListOptions;
@@ -99,7 +99,7 @@ final class LocalFilesystem implements StorageInterface, MissingVariantsReporter
         private readonly string $rootPath,
         private readonly string $publicPath,
         private readonly VariantRegistry $variants,
-        private readonly ImageResizer $resizer,
+        private readonly ImageResizerInterface $resizer,
         ?UploadResolverInterface $resolver = null,
         private readonly ?PathVariantResolver $paths = null,
     ) {

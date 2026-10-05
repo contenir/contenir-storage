@@ -55,6 +55,12 @@ final class ImageResizerTest extends TestCase
     }
 
     #[Test]
+    public function anEmptyBinaryPathDisablesTheCli(): void
+    {
+        static::assertNull((new ImageResizer(binaryPath: ''))->binaryPath());
+    }
+
+    #[Test]
     public function choosesABackendPerCallWhenNotForced(): void
     {
         $this->skipUnlessBackendAvailable(useExtension: false);
@@ -141,27 +147,17 @@ final class ImageResizerTest extends TestCase
         symlink((string) $which, $this->path('bin/which'));
         putenv("PATH={$this->path('bin')}");
 
-        $resizer = new class extends ImageResizer {
-            public function binary(): ?string
-            {
-                return $this->binaryPath;
-            }
-        };
-
-        static::assertSame($bin, $resizer->binary());
+        static::assertSame($bin, (new ImageResizer())->binaryPath());
     }
 
     #[Test]
     public function failsWhenNoImageMagickBackendIsAvailable(): void
     {
         $source  = $this->writePng('source.png', 10, 10);
-        $resizer = new class extends ImageResizer {
-            public function __construct()
-            {
-                parent::__construct(useExtension: false);
-                $this->binaryPath = null;
-            }
-        };
+        $resizer = new ImageResizer(
+            binaryPath: '',
+            useExtension: false,
+        );
 
         $this->expectException(WriteException::class);
         $this->expectExceptionMessage('No ImageMagick backend available for "PNG" output');
@@ -243,16 +239,17 @@ final class ImageResizerTest extends TestCase
     }
 
     #[Test]
+    public function keepsAnExplicitBinaryPath(): void
+    {
+        static::assertSame('/opt/magick', (new ImageResizer(binaryPath: '/opt/magick'))->binaryPath());
+    }
+
+    #[Test]
     public function probesKnownInstallPathsWhenNothingIsOnThePath(): void
     {
         putenv('PATH=/nonexistent');
 
-        $resizer = new class extends ImageResizer {
-            public function binary(): ?string
-            {
-                return $this->binaryPath;
-            }
-        };
+        $resizer = new ImageResizer();
 
         $expected = null;
         foreach ([
@@ -270,7 +267,7 @@ final class ImageResizerTest extends TestCase
             break;
         }
 
-        static::assertSame($expected, $resizer->binary());
+        static::assertSame($expected, $resizer->binaryPath());
     }
 
     #[Test]

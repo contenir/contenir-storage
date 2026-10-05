@@ -16,6 +16,50 @@ composer require contenir/storage:^2.0
 Projects that must stay on PHP 8.1 or 8.2 can keep using `^0.6`, which is
 maintained on the `0.x` branch.
 
+## Concrete classes are final; resizers have an interface
+
+Every concrete class is `final`. Only two were open in 0.x:
+
+**`ImageResizer`** is final and implements `Image\ImageResizerInterface`. The
+backends, `PathResolver` and `StorageConfig::fromArray()`/`default()` accept
+the interface, so existing `new ImageResizer()` call sites keep working.
+A subclass must become an implementation:
+
+```php
+// 0.x
+final class MyResizer extends ImageResizer
+{
+    public function resize(string $sourcePath, string $destPath, int $width, int $height,
+        VariantFit $fit = VariantFit::Cover, ?int $quality = null): void { /* … */ }
+}
+
+// 2.0
+final class MyResizer implements ImageResizerInterface
+{
+    public function resize(string $sourcePath, string $destPath, int $width, int $height,
+        VariantFit $fit = VariantFit::Cover, ?int $quality = null): void { /* … */ }
+}
+```
+
+Type properties and parameters against `ImageResizerInterface` rather than
+`ImageResizer`. `StubImageResizer` now implements the interface and is no
+longer an `instanceof ImageResizer`; code that read the protected
+`$binaryPath` uses the public `binaryPath()` instead. An empty `binaryPath`
+now disables the CLI (0.x ran an empty command, which failed with a
+`WriteException`, as 2.0 still does).
+
+**`Exception\StorageException`** is abstract. It is the common parent of
+`InvalidPathException`, `NotFoundException`, `UnsupportedTypeException` and
+`WriteException`, so it stays a class you can catch:
+
+```php
+// still works
+try { $storage->store($upload, 'docs'); } catch (StorageException $e) { /* … */ }
+
+// 0.x only: throw new StorageException('…');
+// 2.0: throw (or extend) a concrete subclass, e.g. new WriteException('…')
+```
+
 ## Typed class constants
 
 `StorageInterface::THUMBNAIL_VARIANT`, `StorageManager::DEFAULT_PROFILE` and

@@ -12,7 +12,7 @@ use Contenir\Storage\Exception\InvalidPathException;
 use Contenir\Storage\Exception\NotFoundException;
 use Contenir\Storage\Exception\UnsupportedTypeException;
 use Contenir\Storage\Exception\WriteException;
-use Contenir\Storage\Image\ImageResizer;
+use Contenir\Storage\Image\ImageResizerInterface;
 use Contenir\Storage\ImageMeta;
 use Contenir\Storage\Internal\Warnings;
 use Contenir\Storage\ListOptions;
@@ -141,7 +141,7 @@ final class S3 implements
         private readonly FilesystemOperator $fs,
         private readonly string $publicUrlBase,
         private readonly VariantRegistry $variants,
-        private readonly ImageResizer $resizer,
+        private readonly ImageResizerInterface $resizer,
         ?UploadResolverInterface $resolver = null,
         private readonly ?PathVariantResolver $paths = null,
         private readonly bool $autoGenerate = false,

@@ -11,6 +11,7 @@ use Imagick;
 use ImagickException;
 use ImagickPixel;
 use InvalidArgumentException;
+use Override;
 
 use function dirname;
 use function escapeshellarg;
@@ -51,9 +52,9 @@ use const PATHINFO_EXTENSION;
  * @mago-expect lint:cyclomatic-complexity Holds both the imagick and CLI backends; splitting them is a follow-up.
  * @mago-expect lint:kan-defect Holds both the imagick and CLI backends; splitting them is a follow-up.
  */
-class ImageResizer
+final class ImageResizer implements ImageResizerInterface
 {
-    protected ?string $binaryPath;
+    private readonly ?string $binaryPath;
 
     /** @var bool|null Explicit backend override for callers/tests; null defers to per-call format support. */
     private readonly ?bool $forcedUseExtension;
@@ -64,6 +65,7 @@ class ImageResizer
      *                                  can't handle a given format. When null,
      *                                  opportunistically discovered from PATH
      *                                  at construction time (never throws).
+     *                                  An empty string disables the CLI.
      * @param bool|null   $useExtension Force the native-extension path (true) or
      *                                  the CLI-binary path (false) for every
      *                                  call. When null (the default), decided
@@ -72,7 +74,11 @@ class ImageResizer
     public function __construct(?string $binaryPath = null, ?bool $useExtension = null)
     {
         $this->forcedUseExtension = $useExtension;
-        $this->binaryPath         = $binaryPath ?? self::tryDiscoverBinary();
+        $this->binaryPath         = match ($binaryPath) {
+            null    => self::tryDiscoverBinary(),
+            ''      => null,
+            default => $binaryPath,
+        };
     }
 
     private static function extensionSupportsFormat(string $format): bool
@@ -106,6 +112,15 @@ class ImageResizer
     }
 
     /**
+     * The ImageMagick CLI used when the extension cannot handle a format:
+     * the configured path, the one discovered at construction, or null.
+     */
+    public function binaryPath(): ?string
+    {
+        return $this->binaryPath;
+    }
+
+    /**
      * Resize $sourcePath to $destPath at $width × $height honouring $fit.
      *
      * The destination directory is created if missing. Any existing file at
@@ -117,8 +132,9 @@ class ImageResizer
      *                             ImageMagick fails.
      * @throws InvalidArgumentException If the dimensions do not suit $fit.
      *
-     * @mago-expect lint:excessive-parameter-list Published signature, overridden by StubImageResizer and consumers.
+     * @mago-expect lint:excessive-parameter-list Implements ImageResizerInterface::resize().
      */
+    #[Override]
     public function resize(
         string $sourcePath,
         string $destPath,

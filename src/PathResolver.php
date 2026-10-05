@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Contenir\Storage;
 
 use Contenir\Storage\Exception\WriteException;
-use Contenir\Storage\Image\ImageResizer;
+use Contenir\Storage\Image\ImageResizerInterface;
 use Contenir\Storage\Internal\Warnings;
 use SplFileInfo;
 
@@ -45,7 +45,7 @@ final class PathResolver
 {
     public function __construct(
         private readonly string $rootPath,
-        private readonly ImageResizer $resizer,
+        private readonly ImageResizerInterface $resizer,
     ) {}
 
     /**

@@ -14,22 +14,17 @@ use function mkdir;
 use function sprintf;
 
 /**
- * Drop-in ImageResizer that records calls and writes a placeholder file rather
+ * Drop-in ImageResizerInterface that records calls and writes a placeholder file rather
  * than shelling out to ImageMagick. Lets LocalFilesystem unit tests
  * verify variant-generation orchestration without real image transformation.
  */
-final class StubImageResizer extends ImageResizer
+final class StubImageResizer implements ImageResizerInterface
 {
     /** @var list<array{source: string, dest: string, width: int, height: int, fit: VariantFit, quality: ?int}> */
     public array $calls = [];
 
-    public function __construct()
-    {
-        $this->binaryPath = '/dev/null';
-    }
-
     /**
-     * @mago-expect lint:excessive-parameter-list Overrides ImageResizer::resize().
+     * @mago-expect lint:excessive-parameter-list Implements ImageResizerInterface::resize().
      */
     #[Override]
     public function resize(

@@ -10,7 +10,7 @@ use Contenir\Storage\Entry;
 use Contenir\Storage\Exception\InvalidPathException;
 use Contenir\Storage\Exception\NotFoundException;
 use Contenir\Storage\Exception\WriteException;
-use Contenir\Storage\Image\ImageResizer;
+use Contenir\Storage\Image\ImageResizerInterface;
 use Contenir\Storage\Image\StubImageResizer;
 use Contenir\Storage\ListOptions;
 use Contenir\Storage\ResolvedUpload;
@@ -397,7 +397,7 @@ final class LocalFilesystemTest extends TestCase
     public function regenerateMissingVariantsWrapsAResizerFailure(): void
     {
         $this->writePng('a.png', 2, 2);
-        $resizer = $this->createStub(ImageResizer::class);
+        $resizer = $this->createStub(ImageResizerInterface::class);
         $resizer->method('resize')->willThrowException(new WriteException('boom'));
         $backend = new LocalFilesystem($this->path(), '', new VariantRegistry(new Variant('thumb', 1, 1)), $resizer);
 
@@ -720,7 +720,7 @@ final class LocalFilesystemTest extends TestCase
     {
         $this->writePng('uploads/a.png', 10, 10);
 
-        $resizer = $this->createStub(ImageResizer::class);
+        $resizer = $this->createStub(ImageResizerInterface::class);
         $resizer->method('resize')->willThrowException(new RuntimeException('resizer is on fire'));
         $backend = new LocalFilesystem(
             $this->tmpDir,

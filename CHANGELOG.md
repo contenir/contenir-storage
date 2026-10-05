@@ -15,6 +15,15 @@ Contenir 2.x packages. See [UPGRADE-2.0.md](UPGRADE-2.0.md).
 - Requires PHP 8.3, 8.4 or 8.5. PHP 8.1 and 8.2 are no longer supported.
 - Requires `league/flysystem` ^3.29, the first release free of PHP 8.4
   implicit-nullable deprecations.
+- Every concrete class is `final`. `ImageResizer` is final and implements the
+  new `Image\ImageResizerInterface`; `LocalFilesystem`, `S3`, `PathResolver`
+  and `StorageConfig` accept any `ImageResizerInterface`, and
+  `StubImageResizer` implements the interface instead of extending
+  `ImageResizer`.
+- `Exception\StorageException` is abstract. Every exception the package
+  throws still extends it, so `catch (StorageException)` is unchanged.
+- An empty `binaryPath` passed to `ImageResizer` disables the CLI instead of
+  running an empty command.
 - Class constants are typed (`StorageInterface::THUMBNAIL_VARIANT`,
   `StorageManager::DEFAULT_PROFILE`, `PathVariantResolver::WILDCARD`).
 - The `Thumbnail` trait declares the `url()` method it calls as abstract.
@@ -42,6 +51,7 @@ Contenir 2.x packages. See [UPGRADE-2.0.md](UPGRADE-2.0.md).
 
 ### Added
 
+- `Image\ImageResizerInterface` and `ImageResizer::binaryPath()`.
 - `docs/` pages for each feature area.
 - Continuous integration on PHP 8.3, 8.4 and 8.5 against lowest, locked and
   latest dependencies, with coverage reported to Codecov.

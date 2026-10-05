@@ -9,7 +9,7 @@ use Contenir\Storage\Config\PathVariantResolver;
 use Contenir\Storage\Entry;
 use Contenir\Storage\Exception\NotFoundException;
 use Contenir\Storage\Exception\WriteException;
-use Contenir\Storage\Image\ImageResizer;
+use Contenir\Storage\Image\ImageResizerInterface;
 use Contenir\Storage\ListOptions;
 use Contenir\Storage\SortDirection;
 use Contenir\Storage\SortField;
@@ -375,7 +375,12 @@ final class S3Test extends TestCase
             new FileAttributes('docs/a.txt', 1, null, 100),
             new FileAttributes('docs/c.png', 1, null, 300),
         ]));
-        $backend = new S3($fs, 'https://cdn.test', new VariantRegistry(), $this->createStub(ImageResizer::class));
+        $backend = new S3(
+            $fs,
+            'https://cdn.test',
+            new VariantRegistry(),
+            $this->createStub(ImageResizerInterface::class),
+        );
 
         static::assertSame(
             ['c.png', 'b.pdf', 'a.txt'],
@@ -628,7 +633,7 @@ final class S3Test extends TestCase
             fs: $this->fs,
             publicUrlBase: $publicUrlBase,
             variants: $variants ?? new VariantRegistry(),
-            resizer: $this->createStub(ImageResizer::class),
+            resizer: $this->createStub(ImageResizerInterface::class),
             paths: $paths,
         );
     }
