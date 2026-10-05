@@ -30,6 +30,7 @@ use League\Flysystem\InMemory\InMemoryFilesystemAdapter;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
 use function array_map;
 use function bin2hex;
@@ -556,6 +557,47 @@ final class S3Test extends TestCase
 
         static::assertSame([], $regenerated);
         static::assertSame([], $this->resizer->calls, 'No resizer calls expected when nothing is missing.');
+    }
+
+    #[Test]
+    public function regenerateMissingVariantsLeavesNoTempFileWhenTheDownloadFailsPartWay(): void
+    {
+        $extension = 'leak' . bin2hex(random_bytes(4));
+        $fs        = new FailingFilesystem();
+        $fs->write("a.{$extension}", 'x');
+        $fs->breakReadStreamOn("a.{$extension}", throws: false);
+        $backend = $this->backendOn($fs, new VariantRegistry(new Variant('thumb', 2, 2)));
+
+        try {
+            $backend->regenerateMissingVariants("a.{$extension}");
+            static::fail('A download that fails part-way must be reported.');
+        } catch (WriteException $e) {
+            static::assertSame(
+                "Failed copying source \"a.{$extension}\" to local temp.",
+                $e->getMessage(),
+            );
+        }
+
+        static::assertSame([], glob(sys_get_temp_dir() . "/cms_s3_source_*.{$extension}"));
+    }
+
+    #[Test]
+    public function regenerateMissingVariantsLeavesNoTempFileWhenTheDownloadThrowsPartWay(): void
+    {
+        $extension = 'leak' . bin2hex(random_bytes(4));
+        $fs        = new FailingFilesystem();
+        $fs->write("a.{$extension}", 'x');
+        $fs->breakReadStreamOn("a.{$extension}", throws: true);
+        $backend = $this->backendOn($fs, new VariantRegistry(new Variant('thumb', 2, 2)));
+
+        try {
+            $backend->regenerateMissingVariants("a.{$extension}");
+            static::fail('A download that throws part-way must not be swallowed.');
+        } catch (RuntimeException $e) {
+            static::assertSame('Connection reset while downloading.', $e->getMessage());
+        }
+
+        static::assertSame([], glob(sys_get_temp_dir() . "/cms_s3_source_*.{$extension}"));
     }
 
     #[Test]
