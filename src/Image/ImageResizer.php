@@ -220,18 +220,23 @@ final class ImageResizer implements ImageResizerInterface
     /**
      * Imagick::resizeImage() rejects 0 for either dimension, unlike the CLI's
      * "Wx"/"xH" geometry strings — so when only one dimension is given, the
-     * missing one is derived from the source's own aspect ratio first.
+     * missing one is derived from the source's own aspect ratio first, and the
+     * image is resized to that box exactly: bestfit would re-derive the given
+     * side from the rounded one and can land a pixel short of it.
      */
     private function resizeContain(Imagick $image, int $width, int $height): void
     {
-        if ($width <= 0 || $height <= 0) {
-            $sourceWidth  = $image->getImageWidth();
-            $sourceHeight = $image->getImageHeight();
-            $width        = $width > 0 ? $width : (int) round(($height * $sourceWidth) / $sourceHeight);
-            $height       = $height > 0 ? $height : (int) round(($width * $sourceHeight) / $sourceWidth);
+        if ($width > 0 && $height > 0) {
+            $image->resizeImage($width, $height, Imagick::FILTER_LANCZOS, blur: 1, bestfit: true);
+            return;
         }
 
-        $image->resizeImage($width, $height, Imagick::FILTER_LANCZOS, blur: 1, bestfit: true);
+        $sourceWidth  = $image->getImageWidth();
+        $sourceHeight = $image->getImageHeight();
+        $width        = $width > 0 ? $width : (int) round(($height * $sourceWidth) / $sourceHeight);
+        $height       = $height > 0 ? $height : (int) round(($width * $sourceHeight) / $sourceWidth);
+
+        $image->resizeImage($width, $height, Imagick::FILTER_LANCZOS, blur: 1, bestfit: false);
     }
 
     /**

@@ -29,10 +29,7 @@
                 "\\$sign = SortDirection::Asc === \\$dir \\? 1 : -1;",
                 // The pattern's groups always participate in a match, so `?? 0` never applies.
                 "\\$width\\s+= \\(int\\) \\(\\$m\\[1\\] \\?\\? 0\\);",
-                "\\$height = \\(int\\) \\(\\$m\\[2\\] \\?\\? 0\\);",
-                // The blur factor leaves the pinned Lanczos output unchanged (see DecrementInteger).
-                "blur: 1,",
-                "\\$image->resizeImage\\(\\$width, \\$height, Imagick::FILTER_LANCZOS, blur: 1, bestfit: true\\);"
+                "\\$height = \\(int\\) \\(\\$m\\[2\\] \\?\\? 0\\);"
             ]
         },
         "DecrementInteger": {
@@ -44,34 +41,7 @@
                 "\\$width\\s+= \\(int\\) \\(\\$m\\[1\\] \\?\\? 0\\);",
                 "\\$height = \\(int\\) \\(\\$m\\[2\\] \\?\\? 0\\);",
                 // exec() always overwrites the exit code it is handed.
-                "\\$exit\\s+= 0;",
-                // Imagick treats any radius <= 0 as "derive it from sigma".
-                "radius: 0,",
-                // The blur factor leaves the pinned Lanczos output unchanged (Imagick ignores it
-                // against ImageMagick 7, and it shows no pixel difference against 6).
-                "blur: 1,",
-                "\\$image->resizeImage\\(\\$width, \\$height, Imagick::FILTER_LANCZOS, blur: 1, bestfit: true\\);"
-            ]
-        },
-        "Division": {
-            "ignoreSourceCodeByRegex": [
-                // resizeImage() runs with bestfit, so an over-sized derived dimension is
-                // clamped by the given one and yields the same image.
-                "\\$(width|height)\\s+= \\$(width|height) > 0 \\? \\$(width|height) : \\(int\\) round\\(.*\\);"
-            ]
-        },
-        "RoundingFamily": {
-            "ignoreSourceCodeByRegex": [
-                // ceil() over-sizes the derived dimension, which bestfit clamps (see Division).
-                // floor() is pinned by containRoundsTheDerivedDimensionToTheNearestPixel, but a
-                // line-based ignore cannot keep it while dropping ceil().
-                "\\$(width|height)\\s+= \\$(width|height) > 0 \\? \\$(width|height) : \\(int\\) round\\(.*\\);"
-            ]
-        },
-        "LogicalOrAllSubExprNegation": {
-            "ignoreSourceCodeByRegex": [
-                // With both dimensions set the branch recomputes nothing, so entering it is harmless.
-                "if \\(\\$width <= 0 \\|\\| \\$height <= 0\\) \\{"
+                "\\$exit\\s+= 0;"
             ]
         },
         "Multiplication": {
@@ -90,9 +60,8 @@
                 // Both handles are locals of copySourceToTemp(), so PHP closes them when it
                 // returns; the explicit close only makes that happen a few lines earlier.
                 "self::close\\(\\$(remote|local)\\);",
-                // No step of the Imagick pipeline pads or flattens, so the background colour
-                // is never read; clear() only frees memory the object releases anyway.
-                "\\$image->setBackgroundColor\\(new ImagickPixel\\(color: 'transparent'\\)\\);",
+                // clear() only frees the wand's memory, which PHP releases when $image goes
+                // out of scope a line later; nothing written to disk depends on it.
                 "\\$image->clear\\(\\);"
             ]
         },

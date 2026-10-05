@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Contenir\Storage\Tests\Integration\Image;
 
+use Closure;
 use Contenir\Storage\Exception\WriteException;
 use Contenir\Storage\Image\ImageResizer;
 use Contenir\Storage\Tests\TestAsset\Image\PngFactory;
@@ -90,22 +91,49 @@ final class ImageResizerTest extends TestCase
     public static function containRoundingProvider(): array
     {
         return [
-            'imagick extension, height only' => [true, [80, 60], [0, 26], [35, 26]],
-            'imagick extension, width only'  => [true, [60, 80], [26, 0], [26, 35]],
-            'CLI binary, height only'        => [false, [80, 60], [0, 26], [35, 26]],
-            'CLI binary, width only'         => [false, [60, 80], [26, 0], [26, 35]],
+            'imagick extension, height only, rounding up'   => [true, [80, 60], [0, 26], [35, 26]],
+            'imagick extension, height only, rounding down' => [true, [40, 70], [0, 6], [3, 6]],
+            'imagick extension, width only, rounding up'    => [true, [60, 80], [26, 0], [26, 35]],
+            'imagick extension, width only, rounding down'  => [true, [70, 40], [6, 0], [6, 3]],
+            'CLI binary, height only, rounding up'          => [false, [80, 60], [0, 26], [35, 26]],
+            'CLI binary, height only, rounding down'        => [false, [40, 70], [0, 6], [3, 6]],
+            'CLI binary, width only, rounding up'           => [false, [60, 80], [26, 0], [26, 35]],
+            'CLI binary, width only, rounding down'         => [false, [70, 40], [6, 0], [6, 3]],
         ];
     }
 
     /**
-     * @return array<string, array{VariantFit}>
+     * The extension's request and the plain Imagick call it must reduce to.
+     *
+     * @return array<string, array{0: VariantFit, 1: int, 2: int, 3: Closure(Imagick): void}>
      */
-    public static function fitProvider(): array
+    public static function extensionPipelineProvider(): array
     {
         return [
-            'cover'   => [VariantFit::Cover],
-            'contain' => [VariantFit::Contain],
-            'fill'    => [VariantFit::Fill],
+            'cover'              => [
+                VariantFit::Cover,
+                40,
+                40,
+                static fn(Imagick $image): bool => $image->cropThumbnailImage(40, 40),
+            ],
+            'contain'            => [
+                VariantFit::Contain,
+                40,
+                40,
+                static fn(Imagick $image): bool => $image->resizeImage(40, 40, Imagick::FILTER_LANCZOS, 1, true),
+            ],
+            'contain width only' => [
+                VariantFit::Contain,
+                40,
+                0,
+                static fn(Imagick $image): bool => $image->resizeImage(40, 30, Imagick::FILTER_LANCZOS, 1, false),
+            ],
+            'fill'               => [
+                VariantFit::Fill,
+                40,
+                40,
+                static fn(Imagick $image): bool => $image->resizeImage(40, 40, Imagick::FILTER_LANCZOS, 1, false),
+            ],
         ];
     }
 
@@ -353,62 +381,47 @@ final class ImageResizerTest extends TestCase
 
     /**
      * Pins the extension backend's pixels to the pipeline the CLI runs
-     * (`-strip … -unsharp 0x0.75`): Lanczos resampling followed by the same
-     * unsharp mask, so both backends sharpen variants identically.
+     * (`-background none -colorspace sRGB -strip … -unsharp 0x0.75`):
+     * Lanczos resampling followed by the same unsharp mask, so both backends
+     * sharpen variants identically. The source mixes a fine checkerboard with
+     * a translucent block so resampling and alpha handling both show up in
+     * the pixels.
+     *
+     * @param Closure(Imagick): void $resample
      */
     #[Test]
-    #[DataProvider('fitProvider')]
-    public function extensionSharpensLikeTheCliUnsharpMask(VariantFit $fit): void
+    #[DataProvider('extensionPipelineProvider')]
+    public function extensionMatchesTheCliPipeline(VariantFit $fit, int $width, int $height, Closure $resample): void
     {
         $this->skipUnlessBackendAvailable(useExtension: true);
         $source = $this->path('source.png');
         $image  = new Imagick();
-        $image->newPseudoImage(80, 60, 'gradient:red-blue');
+        $image->newPseudoImage(120, 90, 'pattern:checkerboard');
+        $image->setImageAlphaChannel(Imagick::ALPHACHANNEL_SET);
         $draw = new ImagickDraw();
-        $draw->setFillColor(new ImagickPixel(color: 'white'));
-        $draw->rectangle(20, 20, 50, 40);
+        $draw->setFillColor(new ImagickPixel(color: 'rgba(255, 0, 0, 0.5)'));
+        $draw->rectangle(30, 20, 80, 60);
         $image->drawImage($draw);
         $image->writeImage("png:{$source}");
         $dest = $this->path('out.png');
 
-        $this->makeResizer(useExtension: true)->resize($source, $dest, 40, 40, $fit);
+        $this->makeResizer(useExtension: true)->resize($source, $dest, $width, $height, $fit);
 
         $expected = new Imagick($source);
+        $expected->setBackgroundColor(new ImagickPixel(color: 'transparent'));
         $expected->transformImageColorspace(Imagick::COLORSPACE_SRGB);
         $expected->stripImage();
-        match ($fit) {
-            VariantFit::Cover   => $expected->cropThumbnailImage(40, 40),
-            VariantFit::Contain => $expected->resizeImage(40, 40, Imagick::FILTER_LANCZOS, blur: 1, bestfit: true),
-            VariantFit::Fill    => $expected->resizeImage(40, 40, Imagick::FILTER_LANCZOS, blur: 1, bestfit: false),
-        };
+        $resample($expected);
         $expected->unsharpMaskImage(
             radius: 0,
             sigma: 0.75,
             amount: 1,
             threshold: 0.05,
         );
+        $expected->setImageCompressionQuality(85);
         $expected->writeImage("png:{$this->path('expected.png')}");
-        $expected = new Imagick($this->path('expected.png'));
-        $actual   = new Imagick($dest);
 
-        static::assertSame(
-            $expected->exportImagePixels(
-                0,
-                0,
-                $expected->getImageWidth(),
-                $expected->getImageHeight(),
-                'RGB',
-                Imagick::PIXEL_CHAR,
-            ),
-            $actual->exportImagePixels(
-                0,
-                0,
-                $actual->getImageWidth(),
-                $actual->getImageHeight(),
-                'RGB',
-                Imagick::PIXEL_CHAR,
-            ),
-        );
+        static::assertSame($this->rgbaPixels($this->path('expected.png')), $this->rgbaPixels($dest));
     }
 
     #[Test]
@@ -685,6 +698,20 @@ final class ImageResizerTest extends TestCase
     private function makeResizer(bool $useExtension): ImageResizer
     {
         return new ImageResizer(useExtension: $useExtension);
+    }
+
+    private function rgbaPixels(string $path): array
+    {
+        $image = new Imagick($path);
+
+        return $image->exportImagePixels(
+            0,
+            0,
+            $image->getImageWidth(),
+            $image->getImageHeight(),
+            'RGBA',
+            Imagick::PIXEL_CHAR,
+        );
     }
 
     /**
