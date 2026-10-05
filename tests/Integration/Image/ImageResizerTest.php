@@ -140,12 +140,12 @@ final class ImageResizerTest extends TestCase
     public function containFitsInsideTheBox(bool $useExtension): void
     {
         $this->skipUnlessBackendAvailable($useExtension);
-        $source = $this->writePng('source.png', 800, 600);
+        $source = $this->writePng('source.png', 80, 60);
         $dest   = $this->path('out.png');
 
-        $this->makeResizer($useExtension)->resize($source, $dest, 400, 400, VariantFit::Contain);
+        $this->makeResizer($useExtension)->resize($source, $dest, 40, 40, VariantFit::Contain);
 
-        static::assertSame([400, 300], $this->dimensions($dest));
+        static::assertSame([40, 30], $this->dimensions($dest));
     }
 
     #[Test]
@@ -153,14 +153,14 @@ final class ImageResizerTest extends TestCase
     public function containResizesProportionallyWhenOnlyHeightIsGiven(bool $useExtension): void
     {
         $this->skipUnlessBackendAvailable($useExtension);
-        $source = $this->writePng('source.png', 800, 600);
+        $source = $this->writePng('source.png', 80, 60);
         $dest   = "{$this->tmpDir}/out.png";
 
-        $this->makeResizer($useExtension)->resize($source, $dest, 0, 300, VariantFit::Contain);
+        $this->makeResizer($useExtension)->resize($source, $dest, 0, 30, VariantFit::Contain);
 
         [$width, $height] = $this->dimensions($dest);
-        static::assertSame(400, $width);
-        static::assertSame(300, $height);
+        static::assertSame(40, $width);
+        static::assertSame(30, $height);
     }
 
     #[Test]
@@ -168,14 +168,14 @@ final class ImageResizerTest extends TestCase
     public function containResizesProportionallyWhenOnlyWidthIsGiven(bool $useExtension): void
     {
         $this->skipUnlessBackendAvailable($useExtension);
-        $source = $this->writePng('source.png', 800, 600);
+        $source = $this->writePng('source.png', 80, 60);
         $dest   = "{$this->tmpDir}/out.png";
 
-        $this->makeResizer($useExtension)->resize($source, $dest, 400, 0, VariantFit::Contain);
+        $this->makeResizer($useExtension)->resize($source, $dest, 40, 0, VariantFit::Contain);
 
         [$width, $height] = $this->dimensions($dest);
-        static::assertSame(400, $width);
-        static::assertSame(300, $height);
+        static::assertSame(40, $width);
+        static::assertSame(30, $height);
     }
 
     /**
@@ -225,14 +225,14 @@ final class ImageResizerTest extends TestCase
     public function coverCropsToExactDimensions(bool $useExtension): void
     {
         $this->skipUnlessBackendAvailable($useExtension);
-        $source = $this->writePng('source.png', 800, 600);
+        $source = $this->writePng('source.png', 80, 60);
         $dest   = "{$this->tmpDir}/out.png";
 
-        $this->makeResizer($useExtension)->resize($source, $dest, 400, 400, VariantFit::Cover);
+        $this->makeResizer($useExtension)->resize($source, $dest, 40, 40, VariantFit::Cover);
 
         [$width, $height] = $this->dimensions($dest);
-        static::assertSame(400, $width);
-        static::assertSame(400, $height);
+        static::assertSame(40, $width);
+        static::assertSame(40, $height);
     }
 
     #[Test]
@@ -240,11 +240,11 @@ final class ImageResizerTest extends TestCase
     public function coverRejectsZeroDimension(bool $useExtension): void
     {
         $this->skipUnlessBackendAvailable($useExtension);
-        $source = $this->writePng('source.png', 800, 600);
+        $source = $this->writePng('source.png', 80, 60);
         $dest   = "{$this->tmpDir}/out.png";
 
         $this->expectException(InvalidArgumentException::class);
-        $this->makeResizer($useExtension)->resize($source, $dest, 400, 0, VariantFit::Cover);
+        $this->makeResizer($useExtension)->resize($source, $dest, 40, 0, VariantFit::Cover);
     }
 
     #[Test]
@@ -504,11 +504,11 @@ final class ImageResizerTest extends TestCase
     public function fillRejectsZeroDimension(bool $useExtension): void
     {
         $this->skipUnlessBackendAvailable($useExtension);
-        $source = $this->writePng('source.png', 800, 600);
+        $source = $this->writePng('source.png', 80, 60);
         $dest   = "{$this->tmpDir}/out.png";
 
         $this->expectException(InvalidArgumentException::class);
-        $this->makeResizer($useExtension)->resize($source, $dest, 0, 300, VariantFit::Fill);
+        $this->makeResizer($useExtension)->resize($source, $dest, 0, 30, VariantFit::Fill);
     }
 
     #[Test]
@@ -516,14 +516,14 @@ final class ImageResizerTest extends TestCase
     public function fillStretchesToExactDimensions(bool $useExtension): void
     {
         $this->skipUnlessBackendAvailable($useExtension);
-        $source = $this->writePng('source.png', 800, 600);
+        $source = $this->writePng('source.png', 80, 60);
         $dest   = "{$this->tmpDir}/out.png";
 
-        $this->makeResizer($useExtension)->resize($source, $dest, 200, 500, VariantFit::Fill);
+        $this->makeResizer($useExtension)->resize($source, $dest, 20, 50, VariantFit::Fill);
 
         [$width, $height] = $this->dimensions($dest);
-        static::assertSame(200, $width);
-        static::assertSame(500, $height);
+        static::assertSame(20, $width);
+        static::assertSame(50, $height);
     }
 
     #[Test]
@@ -579,7 +579,7 @@ final class ImageResizerTest extends TestCase
     public function rejectsZeroForBothDimensions(bool $useExtension): void
     {
         $this->skipUnlessBackendAvailable($useExtension);
-        $source = $this->writePng('source.png', 800, 600);
+        $source = $this->writePng('source.png', 80, 60);
         $dest   = "{$this->tmpDir}/out.png";
 
         $this->expectException(InvalidArgumentException::class);
@@ -603,14 +603,14 @@ final class ImageResizerTest extends TestCase
     #[Test]
     public function resizeThrowsWhenForcedToCliAndBinaryCannotRun(): void
     {
-        $source = $this->writePng('source.png', 800, 600);
+        $source = $this->writePng('source.png', 80, 60);
         $dest   = "{$this->tmpDir}/out.png";
 
         $this->expectException(WriteException::class);
         (new ImageResizer(
             binaryPath: '/nonexistent/magick',
             useExtension: false,
-        ))->resize($source, $dest, 400, 400, VariantFit::Cover);
+        ))->resize($source, $dest, 40, 40, VariantFit::Cover);
     }
 
     #[Test]
