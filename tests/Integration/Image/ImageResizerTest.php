@@ -373,6 +373,8 @@ final class ImageResizerTest extends TestCase
         $this->makeResizer(useExtension: true)->resize($source, $dest, 40, 40, $fit);
 
         $expected = new Imagick($source);
+        $expected->transformImageColorspace(Imagick::COLORSPACE_SRGB);
+        $expected->stripImage();
         match ($fit) {
             VariantFit::Cover   => $expected->cropThumbnailImage(40, 40),
             VariantFit::Contain => $expected->resizeImage(40, 40, Imagick::FILTER_LANCZOS, blur: 1, bestfit: true),
@@ -384,7 +386,9 @@ final class ImageResizerTest extends TestCase
             amount: 1,
             threshold: 0.05,
         );
-        $actual = new Imagick($dest);
+        $expected->writeImage("png:{$this->path('expected.png')}");
+        $expected = new Imagick($this->path('expected.png'));
+        $actual   = new Imagick($dest);
 
         static::assertSame(
             $expected->exportImagePixels(
