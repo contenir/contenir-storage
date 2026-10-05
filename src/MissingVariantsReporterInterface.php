@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Contenir\Storage;
 
+use Contenir\Storage\Exception\InvalidPathException;
 use Contenir\Storage\Exception\NotFoundException;
 
 /**
@@ -13,6 +14,8 @@ use Contenir\Storage\Exception\NotFoundException;
  * for tooling that needs to audit before it writes. Implemented separately from
  * StorageInterface so backends outside this package are not forced to grow a
  * method they have no use for.
+ *
+ * @api
  */
 interface MissingVariantsReporterInterface
 {
@@ -24,7 +27,8 @@ interface MissingVariantsReporterInterface
      *
      * @return list<string>
      *
-     * @throws NotFoundException If $path itself does not exist.
+     * @throws NotFoundException    If $path itself does not exist.
+     * @throws InvalidPathException If $path is unsafe (null byte, traversal, escapes the root).
      */
     public function missingVariants(string $path): array;
 }

@@ -4,38 +4,19 @@ declare(strict_types=1);
 
 namespace Contenir\Storage\Tests\Unit;
 
-use DateTimeImmutable;
 use Contenir\Storage\Entry;
+use DateTimeImmutable;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
+
+use function md5;
 
 #[Group('unit')]
 #[Group('storage')]
 final class EntryTest extends TestCase
 {
-    public function testIsFileReturnsTrueForNonDirectory(): void
-    {
-        $entry = $this->makeEntry(isDir: false, mime: 'image/jpeg');
-
-        self::assertTrue($entry->isFile());
-    }
-
-    public function testIsFileReturnsFalseForDirectory(): void
-    {
-        $entry = $this->makeEntry(isDir: true, mime: 'inode/directory');
-
-        self::assertFalse($entry->isFile());
-    }
-
-    #[DataProvider('imageMimeProvider')]
-    public function testIsImageReturnsTrueForImageMimeTypes(string $mime): void
-    {
-        $entry = $this->makeEntry(isDir: false, mime: $mime);
-
-        self::assertTrue($entry->isImage());
-    }
-
     /** @return array<string, array{0: string}> */
     public static function imageMimeProvider(): array
     {
@@ -48,30 +29,72 @@ final class EntryTest extends TestCase
         ];
     }
 
-    #[DataProvider('nonImageMimeProvider')]
-    public function testIsImageReturnsFalseForNonImageMimeTypes(string $mime): void
-    {
-        $entry = $this->makeEntry(isDir: false, mime: $mime);
-
-        self::assertFalse($entry->isImage());
-    }
-
     /** @return array<string, array{0: string}> */
     public static function nonImageMimeProvider(): array
     {
         return [
-            'plain text'      => ['text/plain'],
-            'pdf'             => ['application/pdf'],
-            'octet stream'    => ['application/octet-stream'],
-            'html'            => ['text/html'],
+            'plain text'   => ['text/plain'],
+            'pdf'          => ['application/pdf'],
+            'octet stream' => ['application/octet-stream'],
+            'html'         => ['text/html'],
         ];
     }
 
-    public function testIsImageReturnsFalseForDirectoryEvenIfMimeIsImage(): void
+    #[Test]
+    public function isFileReturnsFalseForDirectory(): void
     {
-        $entry = $this->makeEntry(isDir: true, mime: 'image/jpeg');
+        $entry = $this->makeEntry(
+            isDir: true,
+            mime: 'inode/directory',
+        );
 
-        self::assertFalse($entry->isImage());
+        static::assertFalse($entry->isFile());
+    }
+
+    #[Test]
+    public function isFileReturnsTrueForNonDirectory(): void
+    {
+        $entry = $this->makeEntry(
+            isDir: false,
+            mime: 'image/jpeg',
+        );
+
+        static::assertTrue($entry->isFile());
+    }
+
+    #[Test]
+    public function isImageReturnsFalseForDirectoryEvenIfMimeIsImage(): void
+    {
+        $entry = $this->makeEntry(
+            isDir: true,
+            mime: 'image/jpeg',
+        );
+
+        static::assertFalse($entry->isImage());
+    }
+
+    #[Test]
+    #[DataProvider('nonImageMimeProvider')]
+    public function isImageReturnsFalseForNonImageMimeTypes(string $mime): void
+    {
+        $entry = $this->makeEntry(
+            isDir: false,
+            mime: $mime,
+        );
+
+        static::assertFalse($entry->isImage());
+    }
+
+    #[Test]
+    #[DataProvider('imageMimeProvider')]
+    public function isImageReturnsTrueForImageMimeTypes(string $mime): void
+    {
+        $entry = $this->makeEntry(
+            isDir: false,
+            mime: $mime,
+        );
+
+        static::assertTrue($entry->isImage());
     }
 
     private function makeEntry(bool $isDir, string $mime): Entry

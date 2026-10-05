@@ -4,14 +4,15 @@ declare(strict_types=1);
 
 namespace Contenir\Storage\Tests\Unit\Config;
 
-use InvalidArgumentException;
-use Contenir\Storage\Config\StorageConfig;
 use Contenir\Storage\Adapter\CloudflareImages;
 use Contenir\Storage\Adapter\LocalFilesystem;
 use Contenir\Storage\Adapter\S3;
+use Contenir\Storage\Config\StorageConfig;
 use Contenir\Storage\Image\StubImageResizer;
 use Contenir\Storage\StorageManager;
+use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
 #[Group('unit')]
@@ -20,78 +21,47 @@ final class StorageConfigTest extends TestCase
 {
     private StubImageResizer $resizer;
 
-    protected function setUp(): void
+    #[Test]
+    public function aBackendThatIsNotAnArrayIsRejected(): void
     {
-        parent::setUp();
-        $this->resizer = new StubImageResizer();
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Backend "local" must be an array.');
+
+        $this->build(['backend' => ['local' => 'nope']]);
     }
 
-    public function testNoBackendDeclaredBuildsImplicitLocalPrimary(): void
-    {
-        $manager = StorageConfig::fromArray([], $this->resizer, '/var/uploads');
-
-        self::assertSame(['local'], $manager->profiles());
-        self::assertSame('local', $manager->primaryKey());
-        self::assertInstanceOf(LocalFilesystem::class, $manager->primary());
-    }
-
-    public function testNullConfigBuildsImplicitLocal(): void
-    {
-        $manager = StorageConfig::fromArray(null, $this->resizer, '/var/uploads');
-
-        self::assertSame(['local'], $manager->profiles());
-        self::assertSame('local', $manager->primaryKey());
-    }
-
-    public function testImplicitLocalRootIsTheDefaultRoot(): void
-    {
-        $manager = StorageConfig::fromArray([], $this->resizer, '/srv/site/public');
-
-        self::assertSame('/srv/site/public/file.jpg', $manager->primary()->localPath('file.jpg'));
-    }
-
-    public function testDeclaredBackendWithoutDefaultLeavesLocalPrimary(): void
+    #[Test]
+    public function artDirectedLadderExpandsToWidthNamedVariants(): void
     {
         $manager = $this->build([
-            'backend' => ['r2' => $this->s3Stub()],
+            'variants' => [
+                'card'        => ['fit' => 'cover', 'dimensions' => ['320x320', '480x480', '768x768']],
+                'admin-thumb' => ['width' => 180, 'height' => 180, 'fit' => 'contain'],
+            ],
         ]);
 
-        // 'local' is pre-wired; without a default flag it stays primary.
-        self::assertSame(['r2', 'local'], $manager->profiles());
-        self::assertSame('local', $manager->primaryKey());
-        self::assertInstanceOf(S3::class, $manager->get('r2'));
-        self::assertInstanceOf(LocalFilesystem::class, $manager->get('local'));
+        $backend = $manager->primary();
+
+        static::assertNull($backend->url('missing.jpg', 'card-320'));
+        static::assertNull($backend->url('missing.jpg', 'card-768'));
+        static::assertNull($backend->url('missing.jpg', 'admin-thumb'));
+
+        // The family key itself is not a variant — only its expanded rungs are.
+        $this->expectException(InvalidArgumentException::class);
+        $backend->url('missing.jpg', 'card');
     }
 
-    public function testDefaultFlagPromotesBackendToPrimary(): void
+    #[Test]
+    public function aVariantThatIsNotAnArrayIsRejected(): void
     {
-        $manager = $this->build([
-            'backend' => ['r2' => $this->s3Stub() + ['default' => true]],
-        ]);
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Variant "thumb" must be an array.');
 
-        self::assertSame('r2', $manager->primaryKey());
-        self::assertInstanceOf(S3::class, $manager->primary());
+        $this->build(['variants' => ['thumb' => 'nope']]);
     }
 
-    public function testDeclaredLocalBackendOverridesPrewiredRoot(): void
-    {
-        $manager = $this->build([
-            'backend' => ['local' => ['type' => 'local', 'root_path' => '/custom/root']],
-        ]);
-
-        self::assertSame('/custom/root/file.jpg', $manager->get('local')->localPath('file.jpg'));
-    }
-
-    public function testLocalBackendRootPathOverridesDefaultRoot(): void
-    {
-        $manager = $this->build([
-            'backend' => ['main' => ['type' => 'local', 'root_path' => '/explicit/root']],
-        ]);
-
-        self::assertSame('/explicit/root/file.jpg', $manager->get('main')->localPath('file.jpg'));
-    }
-
-    public function testCloudflareImagesBackendBuilds(): void
+    #[Test]
+    public function cloudflareImagesBackendBuilds(): void
     {
         $manager = $this->build([
             'backend' => [
@@ -102,23 +72,98 @@ final class StorageConfigTest extends TestCase
             ],
         ]);
 
-        self::assertInstanceOf(CloudflareImages::class, $manager->get('cf'));
+        static::assertInstanceOf(CloudflareImages::class, $manager->get('cf'));
     }
 
-    public function testMultipleBackendsRequireExactlyOneDefault(): void
+    #[Test]
+    public function declaredBackendWithoutDefaultLeavesLocalPrimary(): void
     {
         $manager = $this->build([
-            'backend' => [
-                'local' => ['type' => 'local'],
-                'r2'    => $this->s3Stub() + ['default' => true],
+            'backend' => ['r2' => $this->s3Stub()],
+        ]);
+
+        // 'local' is pre-wired; without a default flag it stays primary.
+        static::assertSame(['r2', 'local'], $manager->profiles());
+        static::assertSame('local', $manager->primaryKey());
+        static::assertInstanceOf(S3::class, $manager->get('r2'));
+        static::assertInstanceOf(LocalFilesystem::class, $manager->get('local'));
+    }
+
+    #[Test]
+    public function declaredLocalBackendOverridesPrewiredRoot(): void
+    {
+        $manager = $this->build([
+            'backend' => ['local' => ['type' => 'local', 'root_path' => '/custom/root']],
+        ]);
+
+        static::assertSame('/custom/root/file.jpg', $manager->get('local')->localPath('file.jpg'));
+    }
+
+    #[Test]
+    public function defaultBuildsAnImplicitLocalPrimary(): void
+    {
+        $manager = StorageConfig::default($this->resizer, '/var/www/public');
+
+        static::assertSame(['local'], $manager->profiles());
+        static::assertInstanceOf(LocalFilesystem::class, $manager->primary());
+    }
+
+    #[Test]
+    public function defaultFlagPromotesBackendToPrimary(): void
+    {
+        $manager = $this->build([
+            'backend' => ['r2' => $this->s3Stub() + ['default' => true]],
+        ]);
+
+        static::assertSame('r2', $manager->primaryKey());
+        static::assertInstanceOf(S3::class, $manager->primary());
+    }
+
+    #[Test]
+    public function flatVariantsCarryQualityFitAndNormalisedFormats(): void
+    {
+        $manager = $this->build([
+            'variants' => [
+                'hero' => [
+                    'width'   => 10,
+                    'height'  => 5,
+                    'fit'     => 'FILL',
+                    'quality' => '70',
+                    'formats' => [' .AVIF ', 'webp'],
+                ],
             ],
         ]);
 
-        self::assertSame(['local', 'r2'], $manager->profiles());
-        self::assertSame('r2', $manager->primaryKey());
+        static::assertSame(
+            [
+                'avif'   => '/_variant/hero/hero.png',
+                'webp'   => '/_variant/hero/hero.png',
+                'source' => '/_variant/hero/hero.png',
+            ],
+            $manager->primary()->variantUrls('hero.png', 'hero'),
+        );
     }
 
-    public function testMoreThanOneDefaultThrows(): void
+    #[Test]
+    public function implicitLocalRootIsTheDefaultRoot(): void
+    {
+        $manager = StorageConfig::fromArray([], $this->resizer, '/srv/site/public');
+
+        static::assertSame('/srv/site/public/file.jpg', $manager->primary()->localPath('file.jpg'));
+    }
+
+    #[Test]
+    public function localBackendRootPathOverridesDefaultRoot(): void
+    {
+        $manager = $this->build([
+            'backend' => ['main' => ['type' => 'local', 'root_path' => '/explicit/root']],
+        ]);
+
+        static::assertSame('/explicit/root/file.jpg', $manager->get('main')->localPath('file.jpg'));
+    }
+
+    #[Test]
+    public function moreThanOneDefaultThrows(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('At most one backend');
@@ -131,72 +176,153 @@ final class StorageConfigTest extends TestCase
         ]);
     }
 
-    public function testVariantsLandOnPrimaryAndOnPinnedBackend(): void
+    #[Test]
+    public function multipleBackendsRequireExactlyOneDefault(): void
     {
         $manager = $this->build([
             'backend' => [
-                'main' => ['type' => 'local', 'root_path' => '/a', 'default' => true],
-                'side' => ['type' => 'local', 'root_path' => '/b'],
-            ],
-            'variants' => [
-                'admin-thumb' => ['width' => 180, 'height' => 180, 'fit' => 'contain'],
-                'card'        => ['width' => 600, 'height' => 400, 'fit' => 'cover', 'backend' => 'side'],
+                'local' => ['type' => 'local'],
+                'r2'    => $this->s3Stub() + ['default' => true],
             ],
         ]);
 
-        $main = $manager->get('main');
-        $side = $manager->get('side');
-
-        // admin-thumb (unpinned) → primary 'main'; card (pinned) → 'side'.
-        self::assertNull($main->url('x.jpg', 'admin-thumb'));   // known on main, file missing
-        self::assertNull($side->url('x.jpg', 'card'));          // known on side, file missing
-
-        $this->expectException(InvalidArgumentException::class);
-        $main->url('x.jpg', 'card');                            // not registered on main
+        static::assertSame(['local', 'r2'], $manager->profiles());
+        static::assertSame('r2', $manager->primaryKey());
     }
 
-    public function testArtDirectedLadderExpandsToWidthNamedVariants(): void
+    #[Test]
+    public function noBackendDeclaredBuildsImplicitLocalPrimary(): void
     {
-        $manager = $this->build([
-            'variants' => [
-                'card'        => ['fit' => 'cover', 'dimensions' => ['320x320', '480x480', '768x768']],
-                'admin-thumb' => ['width' => 180, 'height' => 180, 'fit' => 'contain'],
+        $manager = StorageConfig::fromArray([], $this->resizer, '/var/uploads');
+
+        static::assertSame(['local'], $manager->profiles());
+        static::assertSame('local', $manager->primaryKey());
+        static::assertInstanceOf(LocalFilesystem::class, $manager->primary());
+    }
+
+    #[Test]
+    public function nullConfigBuildsImplicitLocal(): void
+    {
+        $manager = StorageConfig::fromArray(null, $this->resizer, '/var/uploads');
+
+        static::assertSame(['local'], $manager->profiles());
+        static::assertSame('local', $manager->primaryKey());
+    }
+
+    #[Test]
+    public function primaryBackendConfigFallsBackToImplicitLocal(): void
+    {
+        $primary = StorageConfig::primaryBackendConfig(['variants' => []]);
+
+        static::assertSame('local', $primary['type']);
+    }
+
+    #[Test]
+    public function primaryBackendConfigIsEmptyWhenThePrimaryIsNotAnArray(): void
+    {
+        static::assertSame([], StorageConfig::primaryBackendConfig(['backend' => ['local' => 'nope']]));
+    }
+
+    /**
+     * @mago-expect lint:no-literal-password Dummy credentials for an S3 client that is never called.
+     */
+    #[Test]
+    public function primaryBackendConfigReturnsTheDefaultBackend(): void
+    {
+        $cfg = ['backend' => [
+            'r2' => $this->s3Stub()
+                + [
+                    'default'         => true,
+                    'public_base_url' => 'https://cdn.example.com',
+                    'generate_secret' => 's3cr3t',
+                ],
+        ]];
+
+        $primary = StorageConfig::primaryBackendConfig($cfg);
+
+        static::assertSame('https://cdn.example.com', $primary['public_base_url']);
+        static::assertSame('s3cr3t', $primary['generate_secret']);
+    }
+
+    #[Test]
+    public function resolverFromArrayBuildsPathVariantResolver(): void
+    {
+        $resolver = StorageConfig::resolverFromArray([
+            'paths' => [
+                '*'                      => ['variants' => ['admin-thumb']],
+                '/asset/library/news/lg' => ['variants' => ['gallery']],
             ],
         ]);
 
-        $backend = $manager->primary();
-
-        self::assertNull($backend->url('missing.jpg', 'card-320'));
-        self::assertNull($backend->url('missing.jpg', 'card-768'));
-        self::assertNull($backend->url('missing.jpg', 'admin-thumb'));
-
-        // The family key itself is not a variant — only its expanded rungs are.
-        $this->expectException(InvalidArgumentException::class);
-        $backend->url('missing.jpg', 'card');
+        static::assertSame(['gallery', 'admin-thumb'], $resolver->familiesFor('/asset/library/news/lg/x.jpg'));
+        static::assertSame(['admin-thumb'], $resolver->familiesFor('/asset/library/slide/x.jpg'));
     }
 
-    public function testVariantTargetingUnknownBackendThrows(): void
+    #[Test]
+    public function resolverFromArrayHandlesMissingPaths(): void
+    {
+        $resolver = StorageConfig::resolverFromArray([]);
+
+        static::assertSame([], $resolver->familiesFor('/anything.jpg'));
+    }
+
+    #[Test]
+    public function resolverFromArrayIgnoresMalformedPathEntries(): void
+    {
+        $resolver = StorageConfig::resolverFromArray([
+            'paths' => [
+                '/news' => 'nope',
+                '/blog' => ['variants' => ['card', ['nested'], 3]],
+            ],
+        ]);
+
+        static::assertSame([], $resolver->familiesFor('/news/a.png'));
+        static::assertSame(['card', '3'], $resolver->familiesFor('/blog/a.png'));
+    }
+
+    #[Test]
+    public function s3BackendAcceptsThePublicBaseUrlAlias(): void
+    {
+        $stub = $this->s3Stub([
+            'public_base_url'      => 'https://alias.test',
+            'usePathStyleEndpoint' => 1,
+            'auto_generate'        => '1',
+        ]);
+        unset($stub['publicUrl']);
+
+        static::assertSame(
+            ['https://alias.test/a.png'],
+            $this->build(['backend' => ['r2' => $stub]])->get('r2')->urlsForKey('a.png'),
+        );
+    }
+
+    #[Test]
+    public function s3BackendRequiresAPublicUrl(): void
     {
         $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('unknown backend');
+        $this->expectExceptionMessage('Missing required config key "publicUrl" (or "public_base_url").');
+
+        $stub = $this->s3Stub();
+        unset($stub['publicUrl']);
+        $this->build(['backend' => ['r2' => $stub]]);
+    }
+
+    #[Test]
+    public function throwsForCloudflareImagesMissingDeliveryUrl(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('deliveryBaseUrl');
 
         $this->build([
-            'backend'  => ['main' => ['type' => 'local']],
-            'variants' => ['card' => ['width' => 1, 'height' => 1, 'backend' => 'ghost']],
+            'backend' => ['cf' => $this->s3Stub(['type' => 'cloudflare-images'])],
         ]);
     }
 
-    public function testThrowsForUnknownBackendType(): void
-    {
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('unknown type');
-
-        $this->build([
-            'backend' => ['weird' => ['type' => 'azure-blob']],
-        ]);
-    }
-
-    public function testThrowsForS3MissingBucket(): void
+    /**
+     * @mago-expect lint:no-literal-password Dummy credentials for an S3 client that is never called.
+     */
+    #[Test]
+    public function throwsForS3MissingBucket(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('bucket');
@@ -214,17 +340,19 @@ final class StorageConfigTest extends TestCase
         ]);
     }
 
-    public function testThrowsForCloudflareImagesMissingDeliveryUrl(): void
+    #[Test]
+    public function throwsForUnknownBackendType(): void
     {
         $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('deliveryBaseUrl');
+        $this->expectExceptionMessage('unknown type');
 
         $this->build([
-            'backend' => ['cf' => $this->s3Stub(['type' => 'cloudflare-images'])],
+            'backend' => ['weird' => ['type' => 'azure-blob']],
         ]);
     }
 
-    public function testThrowsForUnknownVariantFit(): void
+    #[Test]
+    public function throwsForUnknownVariantFit(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('fit');
@@ -234,7 +362,8 @@ final class StorageConfigTest extends TestCase
         ]);
     }
 
-    public function testVariantNamesForBackendGroupsByAssignment(): void
+    #[Test]
+    public function variantNamesForBackendGroupsByAssignment(): void
     {
         $config = [
             'backend'  => ['r2' => $this->s3Stub() + ['default' => true]],
@@ -245,59 +374,71 @@ final class StorageConfigTest extends TestCase
             ],
         ];
 
-        self::assertSame(['admin-thumb', 'gallery'], StorageConfig::variantNamesForBackend($config, 'r2'));
-        self::assertSame(['mark'], StorageConfig::variantNamesForBackend($config, 'local'));
+        static::assertSame(['admin-thumb', 'gallery'], StorageConfig::variantNamesForBackend($config, 'r2'));
+        static::assertSame(['mark'], StorageConfig::variantNamesForBackend($config, 'local'));
     }
 
-    public function testVariantNamesForBackendUsesLocalPrimaryWhenNoDefault(): void
+    #[Test]
+    public function variantNamesForBackendSkipsMalformedVariants(): void
+    {
+        static::assertSame(
+            ['thumb'],
+            StorageConfig::variantNamesForBackend([
+                'variants' => ['thumb' => ['width' => 1, 'height' => 1], 'broken' => 'nope'],
+            ], 'local'),
+        );
+    }
+
+    #[Test]
+    public function variantNamesForBackendUsesLocalPrimaryWhenNoDefault(): void
     {
         $config = ['variants' => ['gallery' => ['dimensions' => ['320x']]]];
 
-        self::assertSame(['gallery'], StorageConfig::variantNamesForBackend($config, 'local'));
-        self::assertSame([], StorageConfig::variantNamesForBackend($config, 'r2'));
+        static::assertSame(['gallery'], StorageConfig::variantNamesForBackend($config, 'local'));
+        static::assertSame([], StorageConfig::variantNamesForBackend($config, 'r2'));
     }
 
-    public function testPrimaryBackendConfigReturnsTheDefaultBackend(): void
+    #[Test]
+    public function variantsLandOnPrimaryAndOnPinnedBackend(): void
     {
-        $cfg = ['backend' => [
-            'r2' => $this->s3Stub() + [
-                'default'         => true,
-                'public_base_url' => 'https://cdn.example.com',
-                'generate_secret' => 's3cr3t',
+        $manager = $this->build([
+            'backend'  => [
+                'main' => ['type' => 'local', 'root_path' => '/a', 'default' => true],
+                'side' => ['type' => 'local', 'root_path' => '/b'],
             ],
-        ]];
-
-        $primary = StorageConfig::primaryBackendConfig($cfg);
-
-        self::assertSame('https://cdn.example.com', $primary['public_base_url']);
-        self::assertSame('s3cr3t', $primary['generate_secret']);
-    }
-
-    public function testPrimaryBackendConfigFallsBackToImplicitLocal(): void
-    {
-        $primary = StorageConfig::primaryBackendConfig(['variants' => []]);
-
-        self::assertSame('local', $primary['type']);
-    }
-
-    public function testResolverFromArrayBuildsPathVariantResolver(): void
-    {
-        $resolver = StorageConfig::resolverFromArray([
-            'paths' => [
-                '*'                      => ['variants' => ['admin-thumb']],
-                '/asset/library/news/lg' => ['variants' => ['gallery']],
+            'variants' => [
+                'admin-thumb' => ['width' => 180, 'height' => 180, 'fit' => 'contain'],
+                'card'        => ['width' => 600, 'height' => 400, 'fit' => 'cover', 'backend' => 'side'],
             ],
         ]);
 
-        self::assertSame(['gallery', 'admin-thumb'], $resolver->familiesFor('/asset/library/news/lg/x.jpg'));
-        self::assertSame(['admin-thumb'], $resolver->familiesFor('/asset/library/slide/x.jpg'));
+        $main = $manager->get('main');
+        $side = $manager->get('side');
+
+        // admin-thumb (unpinned) → primary 'main'; card (pinned) → 'side'.
+        static::assertNull($main->url('x.jpg', 'admin-thumb')); // known on main, file missing
+        static::assertNull($side->url('x.jpg', 'card')); // known on side, file missing
+
+        $this->expectException(InvalidArgumentException::class);
+        $main->url('x.jpg', 'card'); // not registered on main
     }
 
-    public function testResolverFromArrayHandlesMissingPaths(): void
+    #[Test]
+    public function variantTargetingUnknownBackendThrows(): void
     {
-        $resolver = StorageConfig::resolverFromArray([]);
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('unknown backend');
 
-        self::assertSame([], $resolver->familiesFor('/anything.jpg'));
+        $this->build([
+            'backend'  => ['main' => ['type' => 'local']],
+            'variants' => ['card' => ['width' => 1, 'height' => 1, 'backend' => 'ghost']],
+        ]);
+    }
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->resizer = new StubImageResizer();
     }
 
     /**
@@ -312,16 +453,19 @@ final class StorageConfigTest extends TestCase
      * @param array<string, mixed> $overrides
      *
      * @return array<string, mixed>
+     *
+     * @mago-expect lint:no-literal-password Dummy credentials for an S3 client that is never called.
      */
     private function s3Stub(array $overrides = []): array
     {
-        return array_merge([
+        return [
             'type'      => 's3',
             'endpoint'  => 'https://e.example.com',
             'bucket'    => 'b',
             'key'       => 'k',
             'secret'    => 's',
             'publicUrl' => 'https://cdn.example.com',
-        ], $overrides);
+            ...$overrides,
+        ];
     }
 }

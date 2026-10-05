@@ -16,6 +16,8 @@ namespace Contenir\Storage;
  *
  * Implementations delete exactly the keys given — no variant sweep, no
  * expansion — and batch where the backend supports it.
+ *
+ * @api
  */
 interface BulkDeleteInterface
 {

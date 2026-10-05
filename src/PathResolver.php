@@ -5,7 +5,23 @@ declare(strict_types=1);
 namespace Contenir\Storage;
 
 use Contenir\Storage\Exception\WriteException;
-use Contenir\Storage\Image\ImageResizer;
+use Contenir\Storage\Image\ImageResizerInterface;
+use Contenir\Storage\Internal\Warnings;
+use SplFileInfo;
+
+use function array_filter;
+use function copy;
+use function dirname;
+use function implode;
+use function in_array;
+use function is_dir;
+use function is_writable;
+use function mkdir;
+use function preg_replace;
+use function rtrim;
+use function sprintf;
+use function strtolower;
+use function trim;
 
 /**
  * Bridge between legacy field-config option-bag uploads and the new ImageResizer.
@@ -22,13 +38,28 @@ use Contenir\Storage\Image\ImageResizer;
  *
  * This class is a transitional artefact: when the field-config XML schema is
  * redesigned (post-Mezzio), it goes away.
+ *
+ * @mago-expect lint:cyclomatic-complexity Mirrors the legacy option-bag filter it replaces, and is slated for removal.
  */
 final class PathResolver
 {
     public function __construct(
         private readonly string $rootPath,
-        private readonly ImageResizer $resizer,
-    ) {
+        private readonly ImageResizerInterface $resizer,
+    ) {}
+
+    /**
+     * A string option, or null when it is absent or null.
+     *
+     * @param array<string, mixed> $options
+     *
+     * @mago-expect analysis:mixed-assignment Field-config options are untyped input; cast to string here.
+     */
+    private static function option(array $options, string $key): ?string
+    {
+        $value = $options[$key] ?? null;
+
+        return null === $value ? null : (string) $value;
     }
 
     /**
@@ -51,60 +82,51 @@ final class PathResolver
      */
     public function resolve(array $options, string $sourcePath, ?string $filename = null): string
     {
-        $extension = $this->extensionFor(
-            isset($options['mimeType']) ? (string) $options['mimeType'] : null,
-            isset($options['extension']) ? (string) $options['extension'] : '',
-        );
+        $mime      = strtolower(self::option($options, 'mimeType') ?? '');
+        $extension = $this->extensionFor($mime, self::option($options, 'extension') ?? '');
 
-        $basename = $filename ?? (new \SplFileInfo($sourcePath))->getBasename(
-            '.' . (new \SplFileInfo($sourcePath))->getExtension(),
-        );
-        $suffix    = isset($options['suffix']) ? (string) $options['suffix'] : '';
-        $finalName = sprintf('%s%s.%s', $basename, $suffix, $extension);
+        $source    = new SplFileInfo($sourcePath);
+        $basename  = $filename ?? $source->getBasename(".{$source->getExtension()}");
+        $finalName = sprintf('%s%s.%s', $basename, self::option($options, 'suffix') ?? '', $extension);
 
-        $segments = array_values(array_filter([
-            isset($options['path']) ? trim((string) $options['path'], '/') : null,
-            isset($options['prefix']) ? trim((string) $options['prefix'], '/') : null,
-            $finalName,
-        ], static fn (?string $segment): bool => $segment !== null && $segment !== ''));
+        $segments = array_filter(
+            [
+                trim(self::option($options, 'path') ?? '', characters: '/'),
+                trim(self::option($options, 'prefix') ?? '', characters: '/'),
+                $finalName,
+            ],
+            static fn(string $segment): bool => '' !== $segment,
+        );
 
         $relativePath = '/' . implode('/', $segments);
-        $absolutePath = rtrim($this->rootPath, '/') . $relativePath;
-        $destDir      = \dirname($absolutePath);
+        $absolutePath = rtrim($this->rootPath, characters: '/') . $relativePath;
+        $destDir      = dirname($absolutePath);
 
-        if (! is_dir($destDir) && ! @mkdir($destDir, 0o777, true) && ! is_dir($destDir)) {
+        if (
+            ! is_dir($destDir)
+            && ! Warnings::suppress(mkdir(...), $destDir, permissions: 0o777, recursive: true)
+            && ! is_dir($destDir)
+        ) {
             throw new WriteException(sprintf('Cannot create destination directory "%s".', $destDir));
         }
         if (! is_writable($destDir)) {
             throw new WriteException(sprintf('Destination directory "%s" is not writable.', $destDir));
         }
 
-        $width  = isset($options['width']) ? (int) $options['width'] : 0;
-        $height = isset($options['height']) ? (int) $options['height'] : 0;
-        $mime   = isset($options['mimeType']) ? strtolower((string) $options['mimeType']) : '';
+        $width  = (int) self::option($options, 'width');
+        $height = (int) self::option($options, 'height');
 
         if (($width > 0 || $height > 0) && $this->isResizableMime($mime)) {
             $this->resizer->resize($sourcePath, $absolutePath, $width, $height, VariantFit::Contain);
-        } elseif (! @copy($sourcePath, $absolutePath)) {
+
+            return $relativePath;
+        }
+
+        if (! Warnings::suppress(copy(...), $sourcePath, $absolutePath)) {
             throw new WriteException(sprintf('Failed copying "%s" to "%s".', $sourcePath, $absolutePath));
         }
 
         return $relativePath;
-    }
-
-    /**
-     * Mirror the legacy ImageResize::filter() switch — only the formats it knew
-     * how to drive through ImageMagick are resized; everything else is copied.
-     */
-    private function isResizableMime(string $mime): bool
-    {
-        return in_array($mime, [
-            'image/jpeg',
-            'image/pjpeg',
-            'image/png',
-            'image/x-png',
-            'image/gif',
-        ], true);
     }
 
     /**
@@ -114,20 +136,49 @@ final class PathResolver
      */
     public function sanitiseBasename(string $basename): string
     {
-        $value = preg_replace('/[^\w]+/', '-', $basename) ?? $basename;
-        $value = preg_replace('/-{2,}/', '-', $value) ?? $value;
+        $value =
+            preg_replace(
+                pattern: '/[^\w]+/',
+                replacement: '-',
+                subject: $basename,
+            ) ?? $basename;
+        $value =
+            preg_replace(
+                pattern: '/-{2,}/',
+                replacement: '-',
+                subject: $value,
+            ) ?? $value;
         return strtolower($value);
     }
 
-    private function extensionFor(?string $mime, string $fallback): string
+    private function extensionFor(string $mime, string $fallback): string
     {
-        return match (strtolower((string) $mime)) {
+        return match ($mime) {
             'image/jpeg', 'image/pjpeg'  => 'jpg',
             'image/png', 'image/x-png'   => 'png',
             'image/gif'                  => 'gif',
             'image/webp'                 => 'webp',
             'image/svg+xml', 'image/svg' => 'svg',
-            default => $fallback,
+            default                      => $fallback,
         };
+    }
+
+    /**
+     * Mirror the legacy ImageResize::filter() switch — only the formats it knew
+     * how to drive through ImageMagick are resized; everything else is copied.
+     */
+    private function isResizableMime(string $mime): bool
+    {
+        return in_array(
+            $mime,
+            [
+                'image/jpeg',
+                'image/pjpeg',
+                'image/png',
+                'image/x-png',
+                'image/gif',
+            ],
+            strict: true,
+        );
     }
 }

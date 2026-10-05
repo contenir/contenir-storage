@@ -4,35 +4,62 @@
     "type": "library",
     "license": "MIT",
     "require": {
-        "php": "^8.1 || ^8.2 || ^8.3",
-        "league/flysystem": "^3.0",
+        "php": "~8.3.0 || ~8.4.0 || ~8.5.0",
+        "league/flysystem": "^3.29",
         "psr/log": "^1.1 || ^2.0 || ^3.0"
     },
     "require-dev": {
-        "phpunit/phpunit": "^11.0",
-        "league/flysystem-aws-s3-v3": "^3.0",
-        "league/flysystem-memory": "^3.0",
-        "gumlet/php-image-resize": "^2.0",
-        "cloudflare/sdk": "^1.1",
-        "squizlabs/php_codesniffer": "^3.10"
+        "league/flysystem-aws-s3-v3": "^3.29",
+        "league/flysystem-memory": "^3.29",
+        "league/mime-type-detection": "^1.16",
+        "php-db/phpdb-qa-tools": "0.1.x-dev",
+        "phpunit/phpunit": "^11.5.42"
     },
     "suggest": {
-        "gumlet/php-image-resize": "Required by ImageResizer for local variant generation.",
-        "league/flysystem-aws-s3-v3": "Required by the S3 adapter.",
-        "cloudflare/sdk": "Required by the CloudflareImages adapter."
+        "ext-imagick": "Preferred by ImageResizer for variant generation; the magick/convert CLI is used otherwise.",
+        "league/flysystem-aws-s3-v3": "Required by StorageConfig to build s3 and cloudflare-images backends."
     },
     "autoload": {
-        "psr-4": { "Contenir\\Storage\\": "src/" }
+        "psr-4": {
+            "Contenir\\Storage\\": "src/"
+        }
     },
     "autoload-dev": {
-        "psr-4": { "Contenir\\Storage\\Tests\\": "tests/" }
+        "psr-4": {
+            "Contenir\\Storage\\Tests\\": "tests/"
+        }
     },
     "scripts": {
-        "test": "phpunit",
-        "cs": "phpcs",
-        "cs-fix": "phpcbf"
+        "check": [
+            "@cs-check",
+            "@static-analysis",
+            "@test",
+            "@test-integration"
+        ],
+        "cs-check": [
+            "mago format --check",
+            "mago lint"
+        ],
+        "cs-fix": [
+            "mago format",
+            "mago lint --fix"
+        ],
+        "static-analysis": "mago analyze",
+        "test": "phpunit --colors=always --testsuite unit",
+        "test-integration": "phpunit --colors=always --testsuite integration",
+        "test-coverage": "phpunit --colors=always --coverage-clover clover.xml"
     },
     "config": {
+        "platform": {
+            "php": "8.3.99"
+        },
         "sort-packages": true
-    }
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-main": "2.0.x-dev"
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
 }

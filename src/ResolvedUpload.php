@@ -17,6 +17,5 @@ final class ResolvedUpload
         public readonly string $name,
         public readonly string $mime,
         public readonly ?ImageMeta $image = null,
-    ) {
-    }
+    ) {}
 }

@@ -7,6 +7,7 @@ namespace Contenir\Storage\Tests\Unit\Config;
 use Contenir\Storage\Config\PathVariantResolver;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
 #[Group('unit')]
@@ -20,20 +21,6 @@ final class PathVariantResolverTest extends TestCase
         '/asset/library/news/lg/hero' => ['gallery', 'mark'],
         '/asset/library/footer/lg'    => ['mark'],
     ];
-
-    private static function resolver(): PathVariantResolver
-    {
-        return new PathVariantResolver(self::PATHS);
-    }
-
-    /**
-     * @param list<string> $expected
-     */
-    #[DataProvider('familyCases')]
-    public function testFamiliesForResolvesOwnership(string $path, array $expected): void
-    {
-        self::assertSame($expected, self::resolver()->familiesFor($path));
-    }
 
     /**
      * @return array<string, array{0: string, 1: list<string>}>
@@ -51,7 +38,78 @@ final class PathVariantResolverTest extends TestCase
         ];
     }
 
-    public function testSegmentBoundaryDoesNotMatchSiblingPrefix(): void
+    /**
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function familyNameCases(): array
+    {
+        return [
+            'bare family'          => ['gallery', 'gallery'],
+            'width rung'           => ['gallery-480', 'gallery'],
+            'large width rung'     => ['gallery-1600', 'gallery'],
+            'auto-height rung'     => ['gallery-x960', 'gallery'],
+            'flat preview variant' => ['admin-thumb', 'admin-thumb'],
+        ];
+    }
+
+    private static function resolver(): PathVariantResolver
+    {
+        return new PathVariantResolver(self::PATHS);
+    }
+
+    #[Test]
+    public function allowsAcceptsFamilyRungAndUniversal(): void
+    {
+        $resolver = self::resolver();
+        $path     = '/asset/library/news/lg/photo.jpg';
+
+        static::assertTrue($resolver->allows($path, 'gallery')); // bare family
+        static::assertTrue($resolver->allows($path, 'gallery-480')); // compiled rung
+        static::assertTrue($resolver->allows($path, 'admin-thumb')); // universal
+        static::assertFalse($resolver->allows($path, 'tile')); // not owned here
+        static::assertFalse($resolver->allows($path, 'mark-160')); // family not owned here
+    }
+
+    #[Test]
+    public function aRootEntryIsOwnedByEveryPathBelowIt(): void
+    {
+        $resolver = new PathVariantResolver(['/' => ['root'], '/news' => ['news']]);
+
+        static::assertSame(['root'], $resolver->familiesFor('/blog/a.png'));
+        static::assertSame(['news'], $resolver->familiesFor('news/a.png'));
+        static::assertSame(['root'], $resolver->familiesFor('/'));
+    }
+
+    /**
+     * @param list<string> $expected
+     */
+    #[Test]
+    #[DataProvider('familyCases')]
+    public function familiesForResolvesOwnership(string $path, array $expected): void
+    {
+        static::assertSame($expected, self::resolver()->familiesFor($path));
+    }
+
+    /**
+     * @param non-empty-string $variant
+     */
+    #[Test]
+    #[DataProvider('familyNameCases')]
+    public function familyMapsVariantToOwningFamily(string $variant, string $expected): void
+    {
+        static::assertSame($expected, PathVariantResolver::family($variant));
+    }
+
+    #[Test]
+    public function isConfiguredReflectsWhetherAnyOwnershipIsDeclared(): void
+    {
+        static::assertFalse((new PathVariantResolver([]))->isConfigured());
+        static::assertTrue((new PathVariantResolver(['*' => ['admin-thumb']]))->isConfigured());
+        static::assertTrue((new PathVariantResolver(['/asset/x' => ['gallery']]))->isConfigured());
+    }
+
+    #[Test]
+    public function segmentBoundaryDoesNotMatchSiblingPrefix(): void
     {
         $resolver = new PathVariantResolver([
             '*'                   => ['admin-thumb'],
@@ -59,49 +117,7 @@ final class PathVariantResolverTest extends TestCase
         ]);
 
         // "news-archive" must NOT match the "news" base on a raw string prefix.
-        self::assertSame(['admin-thumb'], $resolver->familiesFor('/asset/library/news-archive/x.jpg'));
-        self::assertSame(['gallery', 'admin-thumb'], $resolver->familiesFor('/asset/library/news/x.jpg'));
-    }
-
-    /**
-     * @param non-empty-string $variant
-     */
-    #[DataProvider('familyNameCases')]
-    public function testFamilyMapsVariantToOwningFamily(string $variant, string $expected): void
-    {
-        self::assertSame($expected, PathVariantResolver::family($variant));
-    }
-
-    /**
-     * @return array<string, array{0: string, 1: string}>
-     */
-    public static function familyNameCases(): array
-    {
-        return [
-            'bare family'        => ['gallery', 'gallery'],
-            'width rung'         => ['gallery-480', 'gallery'],
-            'large width rung'   => ['gallery-1600', 'gallery'],
-            'auto-height rung'   => ['gallery-x960', 'gallery'],
-            'flat preview variant' => ['admin-thumb', 'admin-thumb'],
-        ];
-    }
-
-    public function testIsConfiguredReflectsWhetherAnyOwnershipIsDeclared(): void
-    {
-        self::assertFalse((new PathVariantResolver([]))->isConfigured());
-        self::assertTrue((new PathVariantResolver(['*' => ['admin-thumb']]))->isConfigured());
-        self::assertTrue((new PathVariantResolver(['/asset/x' => ['gallery']]))->isConfigured());
-    }
-
-    public function testAllowsAcceptsFamilyRungAndUniversal(): void
-    {
-        $resolver = self::resolver();
-        $path     = '/asset/library/news/lg/photo.jpg';
-
-        self::assertTrue($resolver->allows($path, 'gallery'));      // bare family
-        self::assertTrue($resolver->allows($path, 'gallery-480'));  // compiled rung
-        self::assertTrue($resolver->allows($path, 'admin-thumb'));  // universal
-        self::assertFalse($resolver->allows($path, 'tile'));        // not owned here
-        self::assertFalse($resolver->allows($path, 'mark-160'));    // family not owned here
+        static::assertSame(['admin-thumb'], $resolver->familiesFor('/asset/library/news-archive/x.jpg'));
+        static::assertSame(['gallery', 'admin-thumb'], $resolver->familiesFor('/asset/library/news/x.jpg'));
     }
 }

@@ -15,6 +15,8 @@ use Contenir\Storage\Exception\UnsupportedTypeException;
  * so every backend produces clean, extension-bearing, detected-type-backed
  * keys uniformly. The resolver fails loudly: it never falls back to
  * client-supplied data and never yields an ambiguous name.
+ *
+ * @api
  */
 interface UploadResolverInterface
 {

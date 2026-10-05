@@ -7,6 +7,11 @@ namespace Contenir\Storage;
 use Contenir\Storage\Config\PathVariantResolver;
 use InvalidArgumentException;
 
+use function array_filter;
+use function array_key_exists;
+use function array_values;
+use function sprintf;
+
 /**
  * Application-level catalogue of named variants known to storage backends.
  *
@@ -25,18 +30,6 @@ final class VariantRegistry
             $byName[$variant->name] = $variant;
         }
         $this->byName = $byName;
-    }
-
-    public function has(string $name): bool
-    {
-        return isset($this->byName[$name]);
-    }
-
-    /** @throws InvalidArgumentException If $name is not registered. */
-    public function get(string $name): Variant
-    {
-        return $this->byName[$name]
-            ?? throw new InvalidArgumentException(sprintf('Unknown variant "%s".', $name));
     }
 
     /** @return list<Variant> */
@@ -60,13 +53,27 @@ final class VariantRegistry
      */
     public function allowedFor(?PathVariantResolver $paths, string $path): array
     {
-        if ($paths === null || ! $paths->isConfigured()) {
+        if (null === $paths || ! $paths->isConfigured()) {
             return $this->all();
         }
 
         return array_values(array_filter(
             $this->all(),
-            static fn (Variant $variant): bool => $paths->allows($path, $variant->name),
+            static fn(Variant $variant): bool => $paths->allows($path, $variant->name),
         ));
+    }
+
+    /** @throws InvalidArgumentException If $name is not registered. */
+    public function get(string $name): Variant
+    {
+        return (
+            $this->byName[$name]
+                ?? throw new InvalidArgumentException(sprintf('Unknown variant "%s".', $name))
+        );
+    }
+
+    public function has(string $name): bool
+    {
+        return array_key_exists($name, $this->byName);
     }
 }

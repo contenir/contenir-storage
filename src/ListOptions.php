@@ -18,6 +18,5 @@ final class ListOptions
         public readonly SortField $sortField = SortField::Name,
         public readonly SortDirection $sortDirection = SortDirection::Asc,
         public readonly bool $includeDirectories = false,
-    ) {
-    }
+    ) {}
 }

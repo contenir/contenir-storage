@@ -15,9 +15,18 @@ use InvalidArgumentException;
  * Adapters with custom thumbnail resolution (e.g. URL transforms instead of
  * materialised siblings) can simply not use the trait and implement the
  * method directly.
+ *
+ * @api
+ *
+ * @mago-expect lint:trait-name Published name used by consumer adapters; renaming it is a BC break left for 3.0.
  */
 trait Thumbnail
 {
+    /**
+     * @throws InvalidArgumentException When $variant is not a registered variant.
+     */
+    abstract public function url(string $path, ?string $variant = null): ?string;
+
     final public function thumbnailUrl(string $path): ?string
     {
         try {
