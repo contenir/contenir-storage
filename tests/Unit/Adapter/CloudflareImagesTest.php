@@ -254,6 +254,15 @@ final class CloudflareImagesTest extends TestCase
     }
 
     #[Test]
+    public function urlThrowsForUnknownVariantEvenWhenTheFileIsMissing(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unknown variant "no-such-variant".');
+
+        $this->backend(new InMemoryStorage())->url('missing.jpg', 'no-such-variant');
+    }
+
+    #[Test]
     public function urlWithoutVariantDelegatesToObjectStore(): void
     {
         $inner = new InMemoryStorage();
@@ -292,6 +301,21 @@ final class CloudflareImagesTest extends TestCase
         static::assertSame(
             ['source' => 'https://cdn.example.com/cdn-cgi/image/width=180,height=180,fit=contain/missing.jpg'],
             $backend->variantUrls('missing.jpg', 'admin-thumb'),
+        );
+    }
+
+    #[Test]
+    public function variantUrlsJoinTheBaseAndKeyWithSingleSlashes(): void
+    {
+        $backend = new CloudflareImages(
+            objectStore: new InMemoryStorage(),
+            deliveryBaseUrl: 'https://cdn.example.com/',
+            variants: new VariantRegistry(new Variant('thumb', 100, 100, VariantFit::Contain)),
+        );
+
+        static::assertSame(
+            ['source' => 'https://cdn.example.com/cdn-cgi/image/width=100,height=100,fit=contain/products/hero.jpg'],
+            $backend->variantUrls('/products/hero.jpg', 'thumb'),
         );
     }
 

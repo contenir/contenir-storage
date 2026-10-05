@@ -27,6 +27,7 @@ use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
+use function array_keys;
 use function array_map;
 use function md5;
 use function sort;
@@ -40,8 +41,6 @@ use function sort;
 #[Group('storage')]
 final class S3Test extends TestCase
 {
-    private FailingFilesystem $fs;
-
     /**
      * @return array<string, array{string, string}>
      */
@@ -143,6 +142,16 @@ final class S3Test extends TestCase
     }
 
     #[Test]
+    public function deleteManyReportsEveryKeyThatCouldNotBeRemoved(): void
+    {
+        $this->fs->write('a.png', 'a');
+        $this->fs->write('b.png', 'b');
+        $this->fs->failOn('delete', 'a.png')->failOn('delete', 'b.png');
+
+        static::assertSame(['a.png', 'b.png'], array_keys($this->backend()->deleteMany(['a.png', 'b.png'])));
+    }
+
+    #[Test]
     public function deleteManyTreatsAnAbsentKeyAsAlreadySatisfied(): void
     {
         static::assertSame([], $this->backend()->deleteMany(['never/existed.png']));
@@ -219,6 +228,14 @@ final class S3Test extends TestCase
     }
 
     #[Test]
+    public function generateForKeyDeclinesAnEmptyBaseEvenWhenADotFileOriginalExists(): void
+    {
+        $this->fs->write('.png', PngFactory::bytes(4, 4));
+
+        static::assertNull($this->backend($this->variants(new Variant('thumb', 2, 2)))->generateForKey('__thumb.png'));
+    }
+
+    #[Test]
     #[DataProvider('unparseableVariantKeyProvider')]
     public function generateForKeyDeclinesKeysItCannotGenerate(string $key): void
     {
@@ -284,6 +301,32 @@ final class S3Test extends TestCase
     }
 
     #[Test]
+    public function imageMetaTrustsTheExistenceCheckOverAReadableBody(): void
+    {
+        $fs = $this->createStub(FilesystemOperator::class);
+        $fs->method('fileExists')->willReturn(false);
+        $fs->method('read')->willReturn(PngFactory::bytes(4, 4));
+        $backend = new S3(
+            fs: $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants: new VariantRegistry(),
+            resizer: $this->createStub(ImageResizerInterface::class),
+        );
+
+        $this->expectException(NotFoundException::class);
+        $backend->imageMeta('a.png');
+    }
+
+    #[Test]
+    public function listDoesNotDescendIntoSubdirectories(): void
+    {
+        $this->fs->write('docs/a.txt', 'a');
+        $this->fs->write('docs/sub/b.txt', 'b');
+
+        static::assertSame(['a.txt'], $this->names($this->backend()->list('docs')));
+    }
+
+    #[Test]
     public function listFiltersByKeyword(): void
     {
         $this->fs->write('docs/report.pdf', 'r');
@@ -337,6 +380,18 @@ final class S3Test extends TestCase
     }
 
     #[Test]
+    public function listKeepsScanningPastAnEntryTheKeywordFiltersOut(): void
+    {
+        $this->fs->write('docs/a-notes.txt', 'n');
+        $this->fs->write('docs/b-report.pdf', 'r');
+
+        static::assertSame(
+            ['b-report.pdf'],
+            $this->names($this->backend()->list('docs', new ListOptions(keyword: 'report'))),
+        );
+    }
+
+    #[Test]
     public function listPrefersTheMimeTypeTheBucketReports(): void
     {
         $this->fs->write('docs/a.png', 'plain text');
@@ -352,6 +407,21 @@ final class S3Test extends TestCase
 
         $this->expectException(NotFoundException::class);
         [...$this->backend()->list('docs')];
+    }
+
+    #[Test]
+    public function listReportsAZeroSizeWhenTheBucketOmitsIt(): void
+    {
+        $fs = $this->createStub(FilesystemOperator::class);
+        $fs->method('listContents')->willReturn(new DirectoryListing([new FileAttributes('docs/a.txt')]));
+        $backend = new S3(
+            fs: $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants: new VariantRegistry(),
+            resizer: $this->createStub(ImageResizerInterface::class),
+        );
+
+        static::assertSame([0], array_map(static fn(Entry $entry): int => $entry->size, [...$backend->list('docs')]));
     }
 
     #[Test]
@@ -405,6 +475,8 @@ final class S3Test extends TestCase
         static::assertSame($expected, $this->names($this->backend()->list('docs', $options)));
     }
 
+    private FailingFilesystem $fs;
+
     #[Test]
     public function listTreatsAnEmptyKeywordAsNoFilter(): void
     {
@@ -454,6 +526,49 @@ final class S3Test extends TestCase
         $this->expectException(NotFoundException::class);
 
         $this->backend()->regenerateMissingVariants('gallery/does-not-exist.png');
+    }
+
+    #[Test]
+    public function regenerateMissingVariantsSkipsTheDownloadWhenNothingIsMissing(): void
+    {
+        $this->fs->write('gallery/cat.png', 'x');
+        $this->fs->write('gallery/cat__thumb.png', 't');
+        $this->fs->failOn('readStream', 'gallery/cat.png');
+
+        static::assertSame(
+            [],
+            $this->backend($this->variants(new Variant('thumb', 1, 1)))->regenerateMissingVariants('gallery/cat.png'),
+        );
+    }
+
+    #[Test]
+    public function renameDoesNotAdvertiseAVariantThatCannotBeMoved(): void
+    {
+        $this->fs->write('a.png', 'a');
+        $this->fs->write('a__thumb.png', 't');
+        $this->fs->failOn('move', 'a__thumb.png');
+        $backend = $this->backend($this->variants(new Variant('thumb', 1, 1)));
+
+        $backend->rename('a.png', 'b.png');
+
+        static::assertNull($backend->url('b.png', 'thumb'));
+    }
+
+    #[Test]
+    public function renameDoesNotAdvertiseAVariantThatNeverExisted(): void
+    {
+        $fs = $this->createStub(FilesystemOperator::class);
+        $fs->method('fileExists')->willReturnCallback(static fn(string $key): bool => 'a.png' === $key);
+        $backend = new S3(
+            fs: $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants: $this->variants(new Variant('thumb', 1, 1)),
+            resizer: $this->createStub(ImageResizerInterface::class),
+        );
+
+        $backend->rename('a.png', 'b.png');
+
+        static::assertNull($backend->url('b.png', 'thumb'));
     }
 
     #[Test]
@@ -520,6 +635,14 @@ final class S3Test extends TestCase
         $this->backend($this->variants(new Variant('thumb', 1, 1)))->rename('a.png', 'b.png');
 
         static::assertSame(['b.png'], $this->keys());
+    }
+
+    #[Test]
+    public function urlNormalisesBackslashesInThePath(): void
+    {
+        $this->fs->write('docs/a.txt', 'a');
+
+        static::assertSame('https://cdn.test/docs/a.txt', $this->backend()->url('\\docs\\a.txt'));
     }
 
     #[Test]

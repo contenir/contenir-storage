@@ -128,6 +128,7 @@ composer static-analysis   # mago analyze
 composer test              # unit suite: no I/O, the bucket is an in-memory Flysystem
 composer test-integration  # integration suite: real filesystem and ImageMagick in a temp directory
 composer test-coverage     # both suites, clover.xml for Codecov
+composer mutation-test     # Infection over both suites (needs pcov or Xdebug)
 ```
 
 No test talks to a real cloud service. S3 behaviour is exercised against an

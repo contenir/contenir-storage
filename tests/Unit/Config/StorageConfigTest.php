@@ -153,6 +153,16 @@ final class StorageConfigTest extends TestCase
     }
 
     #[Test]
+    public function localBackendPublicPathPrefixesItsUrls(): void
+    {
+        $manager = $this->build([
+            'backend' => ['main' => ['type' => 'local', 'public_path' => '/media']],
+        ]);
+
+        static::assertSame(['/media/a.png'], $manager->get('main')->urlsForKey('a.png'));
+    }
+
+    #[Test]
     public function localBackendRootPathOverridesDefaultRoot(): void
     {
         $manager = $this->build([
@@ -281,6 +291,15 @@ final class StorageConfigTest extends TestCase
     }
 
     #[Test]
+    public function s3BackendAcceptsANonStringRegion(): void
+    {
+        static::assertInstanceOf(
+            S3::class,
+            $this->build(['backend' => ['r2' => $this->s3Stub(['region' => 123])]])->get('r2'),
+        );
+    }
+
+    #[Test]
     public function s3BackendAcceptsThePublicBaseUrlAlias(): void
     {
         $stub = $this->s3Stub([
@@ -292,6 +311,17 @@ final class StorageConfigTest extends TestCase
 
         static::assertSame(
             ['https://alias.test/a.png'],
+            $this->build(['backend' => ['r2' => $stub]])->get('r2')->urlsForKey('a.png'),
+        );
+    }
+
+    #[Test]
+    public function s3BackendPrefersPublicUrlOverTheAlias(): void
+    {
+        $stub = $this->s3Stub(['publicUrl' => 'https://canonical.test', 'public_base_url' => 'https://alias.test']);
+
+        static::assertSame(
+            ['https://canonical.test/a.png'],
             $this->build(['backend' => ['r2' => $stub]])->get('r2')->urlsForKey('a.png'),
         );
     }

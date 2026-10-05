@@ -56,6 +56,16 @@ final class StorageManagerTest extends TestCase
     }
 
     #[Test]
+    public function laterRegistrationsDoNotTakeOverThePrimaryUnlessFlagged(): void
+    {
+        $manager = new StorageManager();
+        $manager->register('local', new InMemoryStorage());
+        $manager->register('r2-cdn', new InMemoryStorage());
+
+        static::assertSame('local', $manager->primaryKey());
+    }
+
+    #[Test]
     public function profilesListsAllRegistered(): void
     {
         $manager = new StorageManager();

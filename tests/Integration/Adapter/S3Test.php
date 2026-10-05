@@ -25,17 +25,25 @@ use Contenir\Storage\VariantFit;
 use Contenir\Storage\VariantRegistry;
 use InvalidArgumentException;
 use League\Flysystem\Filesystem;
+use League\Flysystem\FilesystemOperator;
 use League\Flysystem\InMemory\InMemoryFilesystemAdapter;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
 use function array_map;
+use function bin2hex;
+use function count;
+use function file_exists;
 use function file_get_contents;
 use function file_put_contents;
+use function get_resources;
+use function glob;
 use function md5;
+use function random_bytes;
 use function sort;
 use function str_repeat;
+use function sys_get_temp_dir;
 use function time;
 use function unlink;
 
@@ -43,10 +51,6 @@ use function unlink;
 #[Group('storage')]
 final class S3Test extends TestCase
 {
-    use TemporaryDirectoryTrait;
-
-    private StubImageResizer $resizer;
-
     #[Test]
     public function clearKeyCacheForcesReExistenceProbes(): void
     {
@@ -259,6 +263,50 @@ final class S3Test extends TestCase
         static::assertSame('https://cdn.test/gallery/cat__card.jpg', $url);
         static::assertCount(1, $this->resizer->calls);
         static::assertTrue($fs->fileExists('gallery/cat__card.jpg'));
+    }
+
+    #[Test]
+    public function generateForKeyRemovesItsTempFilesOnceTheVariantIsUploaded(): void
+    {
+        $fs = new FailingFilesystem();
+        $fs->write('gallery/cat.png', 'x');
+
+        $this->backendOn($fs, new VariantRegistry(new Variant('thumb', 2, 2)))->generateForKey(
+            'gallery/cat__thumb.png',
+        );
+
+        static::assertSame([false, false], $this->tempFilesLeftBehind());
+    }
+
+    #[Test]
+    public function generateForKeyRemovesItsTempFilesWhenTheVariantCannotBeWritten(): void
+    {
+        $fs = new FailingFilesystem();
+        $fs->write('gallery/cat.png', 'x');
+        $fs->failOn('writeStream', 'gallery/cat__thumb.png');
+        $backend = $this->backendOn($fs, new VariantRegistry(new Variant('thumb', 2, 2)));
+
+        try {
+            $backend->generateForKey('gallery/cat__thumb.png');
+            static::fail('A variant that cannot be written must be reported.');
+        } catch (WriteException $e) {
+            static::assertStringContainsString('Failed writing "gallery/cat__thumb.png"', $e->getMessage());
+        }
+
+        static::assertSame([false, false], $this->tempFilesLeftBehind());
+    }
+
+    #[Test]
+    public function generateForKeyResizesIntoATempFileCarryingTheRequestedFormat(): void
+    {
+        $fs = new FailingFilesystem();
+        $fs->write('gallery/cat.png', 'x');
+
+        $this->backendOn($fs, new VariantRegistry(new Variant('thumb', 2, 2)))->generateForKey(
+            'gallery/cat__thumb.webp',
+        );
+
+        static::assertStringEndsWith('.webp', $this->resizer->calls[0]['dest']);
     }
 
     #[Test]
@@ -510,6 +558,54 @@ final class S3Test extends TestCase
     }
 
     #[Test]
+    public function regenerateMissingVariantsLeavesNoTempFileWhenTheSourceCannotBeDownloaded(): void
+    {
+        $extension = 'leak' . bin2hex(random_bytes(4));
+        $fs        = new FailingFilesystem();
+        $fs->write("a.{$extension}", 'x');
+        $fs->failOn('readStream', "a.{$extension}");
+        $backend = $this->backendOn($fs, new VariantRegistry(new Variant('thumb', 2, 2)));
+
+        try {
+            $backend->regenerateMissingVariants("a.{$extension}");
+            static::fail('A source that cannot be downloaded must be reported.');
+        } catch (WriteException $e) {
+            static::assertStringContainsString('Failed opening source stream', $e->getMessage());
+        }
+
+        static::assertSame([], glob(sys_get_temp_dir() . "/cms_s3_source_*.{$extension}"));
+    }
+
+    #[Test]
+    public function regenerateMissingVariantsRemovesItsTempFilesOnceTheVariantsAreUploaded(): void
+    {
+        $fs = new FailingFilesystem();
+        $fs->write('a.png', 'x');
+
+        $this->backendOn($fs, new VariantRegistry(new Variant('thumb', 2, 2)))->regenerateMissingVariants('a.png');
+
+        static::assertSame([false, false], $this->tempFilesLeftBehind());
+    }
+
+    #[Test]
+    public function regenerateMissingVariantsRemovesItsTempFilesWhenAVariantCannotBeWritten(): void
+    {
+        $fs = new FailingFilesystem();
+        $fs->write('a.png', 'x');
+        $fs->failOn('writeStream', 'a__thumb.png');
+        $backend = $this->backendOn($fs, new VariantRegistry(new Variant('thumb', 2, 2)));
+
+        try {
+            $backend->regenerateMissingVariants('a.png');
+            static::fail('A variant that cannot be written must be reported.');
+        } catch (WriteException $e) {
+            static::assertStringContainsString('Failed writing "a__thumb.png"', $e->getMessage());
+        }
+
+        static::assertSame([false, false], $this->tempFilesLeftBehind());
+    }
+
+    #[Test]
     public function regenerateMissingVariantsReportsASourceThatCannotBeDownloaded(): void
     {
         $fs = new FailingFilesystem();
@@ -605,6 +701,35 @@ final class S3Test extends TestCase
         $this->expectException(WriteException::class);
 
         $backend->rename('docs/a.txt', 'docs/b.txt');
+    }
+
+    #[Test]
+    public function storeClosesTheUploadStream(): void
+    {
+        $source  = $this->writeFile('a.txt', 'abc');
+        $backend = $this->backendOn(new FailingFilesystem());
+        $before  = count(get_resources('stream'));
+
+        $backend->store(new UploadInput($source, 'a.txt'), 'docs');
+
+        static::assertCount($before, get_resources('stream'));
+    }
+
+    #[Test]
+    public function storeClosesTheUploadStreamWhenTheWriteFails(): void
+    {
+        $source  = $this->writeFile('a.txt', 'abc');
+        $backend = $this->backendOn((new FailingFilesystem())->failOn('writeStream', 'docs/a.txt'));
+        $before  = count(get_resources('stream'));
+
+        try {
+            $backend->store(new UploadInput($source, 'a.txt'), 'docs');
+            static::fail('An upload that cannot be written must be reported.');
+        } catch (WriteException $e) {
+            static::assertStringContainsString('Failed writing "docs/a.txt"', $e->getMessage());
+        }
+
+        static::assertCount($before, get_resources('stream'));
     }
 
     #[Test]
@@ -711,6 +836,33 @@ final class S3Test extends TestCase
     }
 
     #[Test]
+    public function storeRemovesTheVariantTempFileOnceUploaded(): void
+    {
+        $this->backend(new VariantRegistry(new Variant('thumb', 2, 2)))->store(
+            new UploadInput($this->writePng('a.png', 4, 4), 'a.png'),
+            'docs',
+        );
+
+        static::assertFileDoesNotExist($this->resizer->calls[0]['dest']);
+    }
+
+    #[Test]
+    public function storeRemovesTheVariantTempFileWhenItCannotBeUploaded(): void
+    {
+        $fs      = (new FailingFilesystem())->failOn('writeStream', 'docs/a__thumb.png');
+        $backend = $this->backendOn($fs, new VariantRegistry(new Variant('thumb', 2, 2)));
+
+        try {
+            $backend->store(new UploadInput($this->writePng('a.png', 4, 4), 'a.png'), 'docs');
+            static::fail('A variant that cannot be written must be reported.');
+        } catch (WriteException $e) {
+            static::assertStringContainsString('Failed writing "docs/a__thumb.png"', $e->getMessage());
+        }
+
+        static::assertFileDoesNotExist($this->resizer->calls[0]['dest']);
+    }
+
+    #[Test]
     public function storeReportsAnUploadThatCannotBeWritten(): void
     {
         $fs = (new FailingFilesystem())->failOn('writeStream', 'docs/a.txt');
@@ -768,6 +920,18 @@ final class S3Test extends TestCase
     }
 
     #[Test]
+    public function storeResolvesACollisionPastEveryTakenSuffixInTheDirectory(): void
+    {
+        $fs = new FailingFilesystem();
+        $fs->write('docs/note.txt', 'x');
+        $fs->write('docs/note_1.txt', 'x');
+
+        $entry = $this->backendOn($fs)->store(new UploadInput($this->writeFile('a.txt', 'data'), 'note.txt'), 'docs');
+
+        static::assertSame('note_2.txt', $entry->name);
+    }
+
+    #[Test]
     public function storeResolvesCollisionWithSuffix(): void
     {
         $source  = $this->writeFile('a.txt', 'data');
@@ -778,6 +942,22 @@ final class S3Test extends TestCase
 
         static::assertSame('note.txt', $first->name);
         static::assertSame('note_1.txt', $second->name);
+    }
+
+    #[Test]
+    public function storeSendsTheDetectedMimeAsTheContentType(): void
+    {
+        $fs = $this->createMock(FilesystemOperator::class);
+        $fs->expects($this->once())
+            ->method('writeStream')
+            ->with('docs/a.txt', static::anything(), ['ContentType' => 'text/plain']);
+
+        (new S3(
+            fs: $fs,
+            publicUrlBase: 'https://cdn.test',
+            variants: new VariantRegistry(),
+            resizer: $this->resizer,
+        ))->store(new UploadInput($this->writeFile('a.txt', 'plain text'), 'a.txt'), 'docs');
     }
 
     #[Test]
@@ -840,6 +1020,7 @@ final class S3Test extends TestCase
         static::assertSame('hello.txt', $entry->name);
         static::assertSame('docs/hello.txt', $entry->path);
         static::assertSame(md5('hello.txt'), $entry->id);
+        static::assertFalse($entry->isDir);
     }
 
     #[Test]
@@ -851,6 +1032,10 @@ final class S3Test extends TestCase
 
         static::assertNull($backend->url('docs/notes.txt', 'admin-thumb'));
     }
+
+    use TemporaryDirectoryTrait;
+
+    private StubImageResizer $resizer;
 
     #[Test]
     public function urlReturnsPublicUrlForExistingFile(): void
@@ -926,5 +1111,16 @@ final class S3Test extends TestCase
             resolver: $resolver,
             paths: $paths,
         );
+    }
+
+    /**
+     * Whether the source and variant temp files the resizer was handed still
+     * exist, in that order.
+     *
+     * @return array{bool, bool}
+     */
+    private function tempFilesLeftBehind(): array
+    {
+        return [file_exists($this->resizer->calls[0]['source']), file_exists($this->resizer->calls[0]['dest'])];
     }
 }

@@ -17,6 +17,7 @@ use PHPUnit\Framework\TestCase;
 use function chmod;
 use function exec;
 use function extension_loaded;
+use function fileperms;
 use function filesize;
 use function getenv;
 use function getimagesize;
@@ -25,6 +26,7 @@ use function mkdir;
 use function putenv;
 use function sprintf;
 use function symlink;
+use function umask;
 
 /**
  * Exercises ImageResizer against both a real ImageMagick binary and the
@@ -139,6 +141,40 @@ final class ImageResizerTest extends TestCase
     }
 
     #[Test]
+    public function createsTheDestinationDirectoryWithDefaultPermissions(): void
+    {
+        $source  = $this->writePng('source.png', 10, 10);
+        $resizer = new ImageResizer(
+            binaryPath: '',
+            useExtension: false,
+        );
+
+        try {
+            $resizer->resize($source, $this->path('new/out.png'), 10, 10);
+            static::fail('Without a backend the resize itself must still fail.');
+        } catch (WriteException $e) {
+            static::assertStringContainsString('No ImageMagick backend available', $e->getMessage());
+        }
+
+        static::assertSame(0o777 & ~umask(), fileperms($this->path('new')) & 0o777);
+    }
+
+    #[Test]
+    #[DataProvider('backendProvider')]
+    public function defaultsToQuality85(bool $useExtension): void
+    {
+        $this->skipUnlessBackendAvailable($useExtension);
+        $source   = $this->writePng('source.png', 40, 40);
+        $default  = $this->path('default.jpg');
+        $explicit = $this->path('explicit.jpg');
+
+        $this->makeResizer($useExtension)->resize($source, $default, 20, 20, VariantFit::Fill);
+        $this->makeResizer($useExtension)->resize($source, $explicit, 20, 20, VariantFit::Fill, quality: 85);
+
+        static::assertFileEquals($explicit, $default);
+    }
+
+    #[Test]
     public function discoversTheConvertBinaryWhenMagickIsNotOnThePath(): void
     {
         $which = exec('command -v which');
@@ -151,6 +187,20 @@ final class ImageResizerTest extends TestCase
     }
 
     #[Test]
+    public function discoversTheMagickBinaryBeforeConvert(): void
+    {
+        $which  = exec('command -v which');
+        $magick = $this->writeFile('bin/magick', "#!/bin/sh\nexit 0\n");
+        $this->writeFile('bin/convert', "#!/bin/sh\nexit 0\n");
+        chmod($magick, permissions: 0o755);
+        chmod($this->path('bin/convert'), permissions: 0o755);
+        symlink((string) $which, $this->path('bin/which'));
+        putenv("PATH={$this->path('bin')}");
+
+        static::assertSame($magick, (new ImageResizer())->binaryPath());
+    }
+
+    #[Test]
     public function failsWhenNoImageMagickBackendIsAvailable(): void
     {
         $source  = $this->writePng('source.png', 10, 10);
@@ -160,8 +210,26 @@ final class ImageResizerTest extends TestCase
         );
 
         $this->expectException(WriteException::class);
-        $this->expectExceptionMessage('No ImageMagick backend available for "PNG" output');
+        $this->expectExceptionMessage(
+            'No ImageMagick backend available for "PNG" output: the imagick extension doesn\'t support it '
+                . 'and no magick/convert CLI binary was found.',
+        );
         $resizer->resize($source, $this->path('out.png'), 10, 10);
+    }
+
+    #[Test]
+    public function failsWhenTheCliExitsCleanlyWithoutWritingTheDestination(): void
+    {
+        $bin = $this->writeFile('bin/fake-magick', "#!/bin/sh\nexit 0\n");
+        chmod($bin, permissions: 0o755);
+        $source = $this->writePng('source.png', 10, 10);
+
+        $this->expectException(WriteException::class);
+        $this->expectExceptionMessage('ImageMagick failed resizing');
+        (new ImageResizer(
+            binaryPath: $bin,
+            useExtension: false,
+        ))->resize($source, $this->path('out.png'), 10, 10);
     }
 
     #[Test]
@@ -247,7 +315,10 @@ final class ImageResizerTest extends TestCase
     #[Test]
     public function probesKnownInstallPathsWhenNothingIsOnThePath(): void
     {
-        putenv('PATH=/nonexistent');
+        $which = exec('command -v which');
+        mkdir($this->path('bin'));
+        symlink((string) $which, $this->path('bin/which'));
+        putenv("PATH={$this->path('bin')}");
 
         $resizer = new ImageResizer();
 
@@ -293,6 +364,20 @@ final class ImageResizerTest extends TestCase
 
         $this->expectException(InvalidArgumentException::class);
         $this->makeResizer($useExtension)->resize($source, $dest, 0, 0, VariantFit::Contain);
+    }
+
+    #[Test]
+    public function resizesThroughWhicheverBackendSupportsTheFormat(): void
+    {
+        if (! extension_loaded('imagick') && exec('which magick') === '' && exec('which convert') === '') {
+            self::markTestSkipped('Neither the imagick extension nor an ImageMagick CLI is available.');
+        }
+        $source = $this->writePng('source.png', 40, 20);
+        $dest   = $this->path('out.png');
+
+        (new ImageResizer())->resize($source, $dest, 20, 10, VariantFit::Fill);
+
+        static::assertSame([20, 10], $this->dimensions($dest));
     }
 
     #[Test]
