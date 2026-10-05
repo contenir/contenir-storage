@@ -50,7 +50,7 @@
         "test-integration": "phpunit --colors=always --testsuite integration",
         "test-coverage": "phpunit --colors=always --coverage-clover clover.xml",
         "mutation-test": [
-            "infection",
+            "MAGICK_THREAD_LIMIT=1 infection",
             "sed -n '/^Timed Out mutants/,$p' infection.log #"
         ]
     },
