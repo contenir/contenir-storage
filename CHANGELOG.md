@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [2.2.0] - Unreleased
+## [2.2.0] - 2026-10-05
 
 ### Changed
 
@@ -23,7 +23,7 @@ adheres to [Semantic Versioning](https://semver.org/).
     since the first pass already turns each run of non-word characters into a
     single dash.
 
-## [2.1.1] - Unreleased
+## [2.1.1] - 2026-10-05
 
 ### Fixed
 
@@ -47,7 +47,7 @@ adheres to [Semantic Versioning](https://semver.org/).
   short of the given side (e.g. 70×40 at width 6 gave 5×3); it now matches
   the CLI (6×3).
 
-## [2.0.0] - Unreleased
+## [2.0.0] - 2026-10-05
 
 The public API is unchanged apart from the typing noted below. The major
 version marks the move to PHP 8.3+ and the php-db QA toolchain shared by all
