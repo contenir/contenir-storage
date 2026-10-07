@@ -9,11 +9,11 @@
         "psr/log": "^1.1 || ^2.0 || ^3.0"
     },
     "require-dev": {
+        "contenir/contenir-qa-tools": "0.1.x-dev",
         "infection/infection": "^0.34.1",
         "league/flysystem-aws-s3-v3": "^3.29",
         "league/flysystem-memory": "^3.29",
         "league/mime-type-detection": "^1.16",
-        "php-db/phpdb-qa-tools": "0.1.x-dev",
         "phpunit/phpunit": "^11.5.42"
     },
     "suggest": {
