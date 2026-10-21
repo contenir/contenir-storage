@@ -35,6 +35,7 @@ use function dirname;
 use function file_exists;
 use function filemtime;
 use function filesize;
+use function fopen;
 use function getimagesize;
 use function in_array;
 use function is_dir;
@@ -227,6 +228,23 @@ final class LocalFilesystem implements StorageInterface, MissingVariantsReporter
         }
 
         return $missing;
+    }
+
+    #[Override]
+    public function read(string $path)
+    {
+        $path     = $this->normalisePath($path);
+        $absolute = $this->resolveAbsolutePath($path);
+        if (! is_file($absolute)) {
+            throw NotFoundException::forPath($path);
+        }
+
+        $stream = Warnings::suppress(fopen(...), $absolute, mode: 'rb');
+        if (false === $stream) {
+            throw NotFoundException::forPath($path);
+        }
+
+        return $stream;
     }
 
     #[Override]

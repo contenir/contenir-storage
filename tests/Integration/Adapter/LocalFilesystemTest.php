@@ -39,6 +39,7 @@ use function md5;
 use function mkdir;
 use function sort;
 use function str_repeat;
+use function stream_get_contents;
 use function symlink;
 use function sys_get_temp_dir;
 use function touch;
@@ -48,10 +49,6 @@ use function unlink;
 #[Group('storage')]
 final class LocalFilesystemTest extends TestCase
 {
-    use TemporaryDirectoryTrait;
-
-    private StubImageResizer $resizer;
-
     /** @return array<string, array{string}> */
     public static function unsafePathProvider(): array
     {
@@ -289,6 +286,10 @@ final class LocalFilesystemTest extends TestCase
         static::assertSame(['small.txt', 'big.txt'], $names);
     }
 
+    use TemporaryDirectoryTrait;
+
+    private StubImageResizer $resizer;
+
     #[Test]
     public function listSortsByType(): void
     {
@@ -342,6 +343,56 @@ final class LocalFilesystemTest extends TestCase
         $this->expectException(NotFoundException::class);
 
         $this->backend()->missingVariants('nope.png');
+    }
+
+    #[Test]
+    public function readOpensAStoredFileFromItsStart(): void
+    {
+        $this->writeFile('forms/contact/cv.pdf', 'pdf bytes');
+
+        static::assertSame('pdf bytes', stream_get_contents($this->backend()->read('forms/contact/cv.pdf')));
+    }
+
+    #[Test]
+    #[DataProvider('unsafePathProvider')]
+    public function readRejectsUnsafePath(string $unsafe): void
+    {
+        $this->expectException(InvalidPathException::class);
+
+        $this->backend()->read($unsafe);
+    }
+
+    #[Test]
+    public function readThrowsForADirectory(): void
+    {
+        $this->writeFile('forms/cv.pdf', 'pdf bytes');
+
+        $this->expectException(NotFoundException::class);
+
+        $this->backend()->read('forms');
+    }
+
+    #[Test]
+    public function readThrowsForAFileItCannotOpen(): void
+    {
+        $path = $this->writeFile('cv.pdf', 'pdf bytes');
+        chmod($path, permissions: 0o000);
+
+        $this->expectException(NotFoundException::class);
+
+        try {
+            $this->backend()->read('cv.pdf');
+        } finally {
+            chmod($path, permissions: 0o644);
+        }
+    }
+
+    #[Test]
+    public function readThrowsForMissingFile(): void
+    {
+        $this->expectException(NotFoundException::class);
+
+        $this->backend()->read('cv.pdf');
     }
 
     #[Test]

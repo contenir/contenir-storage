@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased] - 2026-10-21
+
+### Added
+
+- `StorageInterface::read($path)` opens a stored file for reading from its
+  start, as a stream the caller closes, so a file can be sent on without
+  being loaded whole: for example a private form upload behind a signed
+  link. Every adapter implements it: `LocalFilesystem` opens the file,
+  `S3` streams the object, `CloudflareImages` reads from its object store,
+  and `InMemoryStorage` gives its bytes. A missing file, a directory or a
+  file that cannot be opened throws `NotFoundException`; an unsafe path
+  throws `InvalidPathException`.
+
+### Changed
+
+- `StorageInterface` gains `read()`, so an implementation outside this
+  package must add it.
+
 ## [2.2.0] - 2026-10-05
 
 ### Changed

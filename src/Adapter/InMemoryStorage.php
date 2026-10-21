@@ -25,10 +25,14 @@ use Override;
 
 use function array_key_exists;
 use function array_keys;
+use function assert;
 use function basename;
 use function file_get_contents;
+use function fopen;
+use function fwrite;
 use function is_readable;
 use function md5;
+use function rewind;
 use function rtrim;
 use function sprintf;
 use function str_contains;
@@ -176,6 +180,23 @@ final class InMemoryStorage implements StorageInterface, MissingVariantsReporter
         ?int $height = null,
     ): void {
         $this->nodes[$this->normalise($path)] = $this->fileNode($bytes, $mime, $width, $height);
+    }
+
+    #[Override]
+    public function read(string $path)
+    {
+        $path = $this->normalise($path);
+        $node = $this->nodes[$path] ?? null;
+        if (null === $node || $node['isDir']) {
+            throw NotFoundException::forPath($path);
+        }
+
+        $stream = fopen('php://memory', mode: 'w+b');
+        assert(false !== $stream, description: 'PHP opens a memory stream');
+        fwrite($stream, $node['bytes']);
+        rewind($stream);
+
+        return $stream;
     }
 
     #[Override]
