@@ -390,6 +390,21 @@ final class S3 implements
 
     /**
      * @throws NotFoundException   If $path does not exist.
+     * @throws FilesystemException If the bucket cannot be queried or the object read.
+     */
+    #[Override]
+    public function read(string $path)
+    {
+        $key = $this->normalisePath($path);
+        if (! $this->fs->fileExists($key)) {
+            throw NotFoundException::forPath($key);
+        }
+
+        return $this->fs->readStream($key);
+    }
+
+    /**
+     * @throws NotFoundException   If $path does not exist.
      * @throws WriteException      If a variant cannot be generated or written.
      * @throws FilesystemException If the bucket cannot be queried.
      */

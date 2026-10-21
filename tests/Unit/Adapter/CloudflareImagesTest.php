@@ -23,6 +23,7 @@ use PHPUnit\Framework\TestCase;
 
 use function array_map;
 use function sort;
+use function stream_get_contents;
 
 #[Group('unit')]
 #[Group('storage')]
@@ -144,6 +145,15 @@ final class CloudflareImagesTest extends TestCase
 
         $this->expectException(NotFoundException::class);
         (new CloudflareImages($inner, 'https://cdn.example.com', new VariantRegistry()))->missingVariants('gone.png');
+    }
+
+    #[Test]
+    public function readDelegatesToObjectStore(): void
+    {
+        $inner = new InMemoryStorage();
+        $inner->putFile('a.txt', 'data');
+
+        static::assertSame('data', stream_get_contents($this->backend($inner)->read('a.txt')));
     }
 
     #[Test]

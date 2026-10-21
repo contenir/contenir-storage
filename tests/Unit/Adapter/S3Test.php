@@ -22,6 +22,7 @@ use InvalidArgumentException;
 use League\Flysystem\DirectoryListing;
 use League\Flysystem\FileAttributes;
 use League\Flysystem\FilesystemOperator;
+use League\Flysystem\UnableToReadFile;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\Attributes\Test;
@@ -31,6 +32,7 @@ use function array_keys;
 use function array_map;
 use function md5;
 use function sort;
+use function stream_get_contents;
 
 /**
  * The bucket is an in-memory Flysystem (FailingFilesystem), so nothing here
@@ -473,6 +475,33 @@ final class S3Test extends TestCase
         $this->fs->write('docs/c.png', 'c');
 
         static::assertSame($expected, $this->names($this->backend()->list('docs', $options)));
+    }
+
+    #[Test]
+    public function readLetsAFailedReadThrough(): void
+    {
+        $this->fs->write('cv.pdf', 'pdf bytes');
+        $this->fs->failOn('readStream', 'cv.pdf');
+
+        $this->expectException(UnableToReadFile::class);
+
+        $this->backend()->read('cv.pdf');
+    }
+
+    #[Test]
+    public function readOpensTheObjectFromTheBucket(): void
+    {
+        $this->fs->write('forms/contact/cv.pdf', 'pdf bytes');
+
+        static::assertSame('pdf bytes', stream_get_contents($this->backend()->read('\\forms\\contact\\cv.pdf')));
+    }
+
+    #[Test]
+    public function readRejectsAMissingObject(): void
+    {
+        $this->expectException(NotFoundException::class);
+
+        $this->backend()->read('cv.pdf');
     }
 
     private FailingFilesystem $fs;

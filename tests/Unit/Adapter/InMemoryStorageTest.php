@@ -23,6 +23,7 @@ use PHPUnit\Framework\TestCase;
 use function array_map;
 use function sort;
 use function str_repeat;
+use function stream_get_contents;
 use function usleep;
 
 #[Group('unit')]
@@ -351,6 +352,34 @@ final class InMemoryStorageTest extends TestCase
         $this->expectException(NotFoundException::class);
 
         (new InMemoryStorage())->missingVariants('a.png');
+    }
+
+    #[Test]
+    public function readOpensAStoredFileFromItsStart(): void
+    {
+        $storage = new InMemoryStorage();
+        $storage->putFile('forms/contact/cv.pdf', 'pdf bytes');
+
+        static::assertSame('pdf bytes', stream_get_contents($storage->read('/forms/contact/cv.pdf')));
+    }
+
+    #[Test]
+    public function readThrowsForADirectory(): void
+    {
+        $storage = new InMemoryStorage();
+        $storage->makeDirectory('forms');
+
+        $this->expectException(NotFoundException::class);
+
+        $storage->read('forms');
+    }
+
+    #[Test]
+    public function readThrowsForMissingFile(): void
+    {
+        $this->expectException(NotFoundException::class);
+
+        (new InMemoryStorage())->read('cv.pdf');
     }
 
     #[Test]

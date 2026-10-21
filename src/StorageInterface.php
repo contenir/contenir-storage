@@ -66,6 +66,20 @@ interface StorageInterface
     public function list(string $path, ?ListOptions $options = null): iterable;
 
     /**
+     * Open a stored file for reading from its start, such as a private upload
+     * a signed link sends, without loading it whole. The caller reads it and
+     * closes it.
+     *
+     * @return resource
+     *
+     * @throws NotFoundException    If $path does not exist, is a directory, or cannot be opened.
+     * @throws InvalidPathException If $path is unsafe (null byte, traversal, escapes the root).
+     *
+     * @mago-expect analysis:missing-return-type PHP has no resource type; the docblock names it.
+     */
+    public function read(string $path);
+
+    /**
      * Materialise registered variants that are missing on the backend for
      * the given asset. Idempotent — variants that already exist are left
      * alone. Returns the list of variant keys (sibling object paths) that

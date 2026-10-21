@@ -92,6 +92,12 @@ final class CloudflareImages implements StorageInterface, MissingVariantsReporte
     }
 
     #[Override]
+    public function read(string $path)
+    {
+        return $this->objectStore->read($path);
+    }
+
+    #[Override]
     public function regenerateMissingVariants(string $path): array
     {
         /**
