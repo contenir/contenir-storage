@@ -98,6 +98,7 @@ $manager->register('local', new LocalFilesystem(
 | `variantUrls(string $path, string $variant): array<string, string>` | Per-format variant URLs, built without I/O |
 | `list(string $path, ?ListOptions): iterable<Entry>` | Browse a directory, filtered and sorted |
 | `exists(string $path): bool` | Whether the asset exists |
+| `read(string $path): resource` | Open the asset for reading from its start, without loading it whole; the caller closes it |
 | `delete(string $path): void` | Delete the asset and every variant sibling |
 | `rename(string $from, string $to): void` | Move the asset and its variant siblings |
 | `imageMeta(string $path): ImageMeta` | Width, height and MIME of an image |
