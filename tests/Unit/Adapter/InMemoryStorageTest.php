@@ -12,6 +12,7 @@ use Contenir\Storage\ListOptions;
 use Contenir\Storage\SortDirection;
 use Contenir\Storage\SortField;
 use Contenir\Storage\StorageInterface;
+use Contenir\Storage\Tests\TestAsset\Image\GifFactory;
 use Contenir\Storage\Variant;
 use Contenir\Storage\VariantRegistry;
 use InvalidArgumentException;
@@ -83,6 +84,15 @@ final class InMemoryStorageTest extends TestCase
         $storage->putFile('a.txt', 'a');
 
         static::assertTrue($storage->exists('a.txt'));
+    }
+
+    #[Test]
+    public function imageMetaFlagsAnAnimatedImageFromItsBytes(): void
+    {
+        $storage = new InMemoryStorage();
+        $storage->putFile('a.gif', GifFactory::bytes(2), 'image/gif', 1, 1);
+
+        static::assertTrue($storage->imageMeta('a.gif')->animated);
     }
 
     #[Test]
@@ -474,6 +484,24 @@ final class InMemoryStorageTest extends TestCase
         $storage->putFile('docs/a.jpg', 'bytes', 'image/jpeg');
 
         static::assertSame('memory://docs/a.jpg?v=thumb', $storage->url('docs/a.jpg', 'thumb'));
+    }
+
+    #[Test]
+    public function urlOfAVariantOfAnAnimatedImageIsNull(): void
+    {
+        $storage = new InMemoryStorage(new VariantRegistry(new Variant('card', 2, 2)));
+        $storage->putFile('a.gif', GifFactory::bytes(2), 'image/gif', 1, 1);
+
+        static::assertNull($storage->url('a.gif', 'card'));
+    }
+
+    #[Test]
+    public function urlOfAVariantOfAStillImageIsItsVariantUrl(): void
+    {
+        $storage = new InMemoryStorage(new VariantRegistry(new Variant('card', 2, 2)));
+        $storage->putFile('a.gif', GifFactory::bytes(1), 'image/gif', 1, 1);
+
+        static::assertSame('memory://a.gif?v=card', $storage->url('a.gif', 'card'));
     }
 
     #[Test]

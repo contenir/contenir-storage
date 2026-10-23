@@ -106,6 +106,16 @@ final class ImageResizer implements ImageResizerInterface
     }
 
     /**
+     * ImageMagick's read specifier for the first frame of $sourcePath. Given an
+     * animation, the CLI otherwise writes one numbered file per frame and never
+     * $destPath itself, and the extension keeps whichever frame it read last.
+     */
+    private static function firstFrame(string $sourcePath): string
+    {
+        return "{$sourcePath}[0]";
+    }
+
+    /**
      * @param list<non-empty-string> $candidates
      */
     private static function tryDiscoverBinary(array $candidates): ?string
@@ -263,7 +273,7 @@ final class ImageResizer implements ImageResizerInterface
         $command = sprintf(
             '%s %s -background none -colorspace sRGB -strip %s -unsharp 0x0.75 -quality %d %s 2>/dev/null',
             escapeshellcmd($binaryPath),
-            escapeshellarg($sourcePath),
+            escapeshellarg(self::firstFrame($sourcePath)),
             $this->geometryArgs($width, $height, $fit),
             $quality,
             escapeshellarg($destPath),
@@ -297,7 +307,7 @@ final class ImageResizer implements ImageResizerInterface
         int $quality,
     ): void {
         try {
-            $image = new Imagick($sourcePath);
+            $image = new Imagick(self::firstFrame($sourcePath));
             $image->transformImageColorspace(Imagick::COLORSPACE_SRGB);
             $image->stripImage();
 

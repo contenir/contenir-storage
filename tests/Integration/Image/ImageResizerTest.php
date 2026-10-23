@@ -7,6 +7,7 @@ namespace Contenir\Storage\Tests\Integration\Image;
 use Closure;
 use Contenir\Storage\Exception\WriteException;
 use Contenir\Storage\Image\ImageResizer;
+use Contenir\Storage\Tests\TestAsset\Image\GifFactory;
 use Contenir\Storage\Tests\TestAsset\Image\PngFactory;
 use Contenir\Storage\Tests\Trait\TemporaryDirectoryTrait;
 use Contenir\Storage\VariantFit;
@@ -363,7 +364,7 @@ final class ImageResizerTest extends TestCase
 
         static::assertSame(
             [
-                $source,
+                "{$source}[0]",
                 '-background',
                 'none',
                 '-colorspace',
@@ -637,6 +638,24 @@ final class ImageResizerTest extends TestCase
 
         $this->expectException(InvalidArgumentException::class);
         $this->makeResizer($useExtension)->resize($source, $dest, 0, 0, VariantFit::Contain);
+    }
+
+    /**
+     * Given an animation the CLI would otherwise write one numbered file per
+     * frame and never the destination, so the resize must read one frame.
+     */
+    #[Test]
+    #[DataProvider('backendProvider')]
+    public function resizesTheFirstFrameOfAnAnimationToASingleFile(bool $useExtension): void
+    {
+        $this->skipUnlessBackendAvailable($useExtension);
+        $source = $this->writeFile('source.gif', GifFactory::bytes(3));
+        $dest   = $this->path('out.png');
+
+        $this->makeResizer($useExtension)->resize($source, $dest, 4, 4, VariantFit::Contain);
+
+        static::assertSame(1, (new Imagick($dest))->getNumberImages());
+        static::assertFileDoesNotExist($this->path('out-0.png'));
     }
 
     #[Test]

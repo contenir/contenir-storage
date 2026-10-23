@@ -101,7 +101,7 @@ $manager->register('local', new LocalFilesystem(
 | `read(string $path): resource` | Open the asset for reading from its start, without loading it whole; the caller closes it |
 | `delete(string $path): void` | Delete the asset and every variant sibling |
 | `rename(string $from, string $to): void` | Move the asset and its variant siblings |
-| `imageMeta(string $path): ImageMeta` | Width, height and MIME of an image |
+| `imageMeta(string $path): ImageMeta` | Width, height and MIME of an image, and whether it is animated |
 | `regenerateMissingVariants(string $path): list<string>` | Backfill variants the asset is missing |
 
 Optional capabilities are separate interfaces: `MissingVariantsReporterInterface`

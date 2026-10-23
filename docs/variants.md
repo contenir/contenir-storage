@@ -71,3 +71,17 @@ without a more specific entry. An unconfigured resolver allows every variant.
 Generation (`store()`, `regenerateMissingVariants()`, `generateForKey()`)
 honours ownership. Cleanup (`delete()`, `rename()`) deliberately does not, so
 siblings written before an ownership change are still removed or moved.
+
+## Animated sources
+
+An animated GIF, APNG or WebP gets no variants. Resizing keeps one frame at
+best, so the source is served as itself at every size instead.
+`Image\AnimationDetector` decides from the file's container format, reading
+only as far as it takes, with no ImageMagick. `imageMeta()` and the `Entry`
+that `store()` returns carry the answer as `ImageMeta::$animated`.
+
+`LocalFilesystem` and `InMemoryStorage` act on it: `store()` and
+`regenerateMissingVariants()` make no variants of an animated source,
+`missingVariants()` reports none, and `url($path, $variant)` answers null,
+even for a still left over from before, so callers fall back to the
+original. `S3` and `CloudflareImages` do not yet.
