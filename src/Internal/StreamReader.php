@@ -46,9 +46,9 @@ final readonly class StreamReader
         return strlen($bytes) === $length ? $bytes : null;
     }
 
-    /** Skip $length bytes; false when the stream ends first. */
-    public function skip(int $length): bool
+    /** Skip up to $length bytes, fewer only at the end of the stream. */
+    public function skip(int $length): void
     {
-        return 0 === $length || null !== $this->readExactly($length);
+        $this->read($length);
     }
 }

@@ -63,6 +63,21 @@ final class PngFactory
         );
     }
 
+    /**
+     * A PNG of the given chunks, in order, each a type and its data.
+     *
+     * @param list<array{string, string}> $chunks
+     */
+    public static function fromChunks(array $chunks): string
+    {
+        $bytes = "\x89PNG\r\n\x1A\n";
+        foreach ($chunks as [$type, $data]) {
+            $bytes .= self::chunk($type, $data);
+        }
+
+        return $bytes;
+    }
+
     private static function chunk(string $type, string $data): string
     {
         return pack('N', strlen($data)) . $type . $data . pack('N', crc32($type . $data));

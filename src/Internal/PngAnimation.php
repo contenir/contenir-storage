@@ -28,21 +28,21 @@ final class PngAnimation
      */
     public static function isAnimated(StreamReader $reader, string $pending): bool
     {
-        while (true) {
-            $header  = $pending . $reader->read(self::CHUNK_HEADER_LENGTH - strlen($pending));
-            $pending = '';
-            if (self::CHUNK_HEADER_LENGTH !== strlen($header)) {
-                return false;
-            }
-
+        $header = $pending . $reader->read(self::CHUNK_HEADER_LENGTH - strlen($pending));
+        while (self::CHUNK_HEADER_LENGTH === strlen($header)) {
             $type = substr($header, offset: 4, length: 4);
             if ('acTL' === $type) {
                 return self::declaresFrames($reader);
             }
-            if ('IDAT' === $type || 'IEND' === $type || ! $reader->skip(self::length($header) + self::CRC_LENGTH)) {
+            if ('IDAT' === $type || 'IEND' === $type) {
                 return false;
             }
+
+            $reader->skip(self::length($header) + self::CRC_LENGTH);
+            $header = $reader->read(self::CHUNK_HEADER_LENGTH);
         }
+
+        return false;
     }
 
     /** Whether the `acTL` data that follows declares more than one frame. */

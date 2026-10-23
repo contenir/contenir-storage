@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Contenir\Storage\Tests\TestAsset\Image;
 
+use function chr;
 use function str_repeat;
 
 /**
@@ -51,5 +52,30 @@ final class GifFactory
                 . str_repeat(self::CONTROL . self::IMAGE_WITH_LOCAL_COLOURS, $frames)
                 . self::TRAILER
         );
+    }
+
+    /**
+     * Frames after a screen whose packed field is $packed, followed by the
+     * global colour table that field declares, if any.
+     */
+    public static function bytesWithScreenField(int $packed, int $frames): string
+    {
+        $table = 0 === ($packed & 0x80) ? '' : str_repeat("\x00", 3 * (2 ** (($packed & 0x07) + 1)));
+
+        return (
+            "GIF89a\x01\x00\x01\x00"
+                . chr($packed)
+                . "\x00\x00"
+                . $table
+                . self::LOOP
+                . str_repeat(self::CONTROL . self::IMAGE, $frames)
+                . self::TRAILER
+        );
+    }
+
+    /** One frame's blocks, with no header or trailer, to append to a file. */
+    public static function frame(): string
+    {
+        return self::CONTROL . self::IMAGE;
     }
 }

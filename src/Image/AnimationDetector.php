@@ -31,8 +31,9 @@ use function substr;
  * - PNG (APNG): an `acTL` chunk declaring more than one frame.
  * - WebP: the animation flag in the `VP8X` header chunk.
  *
- * Anything else, a truncated file or an unreadable one, is reported as not
- * animated: the caller then resizes it as it always has.
+ * Anything else, a file that ends before it answers, or one that cannot be
+ * read, is reported as not animated: the caller then resizes it as it always
+ * has.
  *
  * @api
  */

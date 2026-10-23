@@ -32,11 +32,20 @@ final class AnimationDetectorTest extends TestCase
     public static function animatedProvider(): array
     {
         return [
-            'gif with two frames'          => [GifFactory::bytes(2)],
-            'gif with many frames'         => [GifFactory::bytes(12)],
-            'gif with local colour tables' => [GifFactory::bytesWithLocalColourTables(2)],
-            'apng declaring two frames'    => [PngFactory::bytesWithAnimationControl(2, 2, 2)],
-            'webp with the animation bit'  => [self::extendedWebp(0x12)],
+            'gif with two frames'                    => [GifFactory::bytes(2)],
+            'gif with many frames'                   => [GifFactory::bytes(12)],
+            'gif with local colour tables'           => [GifFactory::bytesWithLocalColourTables(2)],
+            'apng declaring two frames'              => [PngFactory::bytesWithAnimationControl(2, 2, 2)],
+            'webp with the animation bit'            => [self::extendedWebp(0x12)],
+            'gif with a 4-colour global table'       => [GifFactory::bytesWithScreenField(0x81, 2)],
+            'gif with a 256-colour global table'     => [GifFactory::bytesWithScreenField(0x87, 2)],
+            'gif with size bits but no global table' => [GifFactory::bytesWithScreenField(0x01, 2)],
+            'apng that ends after its frame count'   => [substr(
+                PngFactory::bytesWithAnimationControl(2, 2, 2),
+                offset: 0,
+                length: 8 + 25 + 8 + 4,
+            )],
+            'webp that ends after its flags'         => [substr(self::extendedWebp(0x12), offset: 0, length: 12 + 9)],
         ];
     }
 
@@ -51,6 +60,19 @@ final class AnimationDetectorTest extends TestCase
             'png'                                     => [PngFactory::bytes(2, 2)],
             'png with a text chunk before the image'  => [PngFactory::bytesWithComment(2, 2, 'still')],
             'apng declaring a single frame'           => [PngFactory::bytesWithAnimationControl(2, 2, 1)],
+            'gif with frames after its trailer'       => [
+                GifFactory::bytes(1) . GifFactory::frame() . GifFactory::frame(),
+            ],
+            'acTL after the image data'               => [PngFactory::fromChunks([
+                ['IHDR', pack('NNCCCCC', 2, 2, 8, 2, 0, 0, 0)],
+                ['IDAT', ''],
+                ['acTL', pack('NN', 2, 0)],
+            ])],
+            'acTL after the end'                      => [PngFactory::fromChunks([
+                ['IHDR', pack('NNCCCCC', 2, 2, 8, 2, 0, 0, 0)],
+                ['IEND', ''],
+                ['acTL', pack('NN', 2, 0)],
+            ])],
             'extended webp without the animation bit' => [self::extendedWebp(0x10)],
             'jpeg'                                    => ["\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00"],
             'empty'                                   => [''],
