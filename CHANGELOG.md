@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.4.0] - 2026-10-23
 
 ### Added
 
@@ -29,7 +29,7 @@ adheres to [Semantic Versioning](https://semver.org/).
   destination, so the resize failed; the imagick extension kept the last
   frame.
 
-## [Unreleased] - 2026-10-21
+## [2.3.0] - 2026-10-21
 
 ### Added
 
