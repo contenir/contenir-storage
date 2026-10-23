@@ -10,6 +10,7 @@ use Contenir\Storage\Entry;
 use Contenir\Storage\Exception\InvalidPathException;
 use Contenir\Storage\Exception\NotFoundException;
 use Contenir\Storage\Exception\WriteException;
+use Contenir\Storage\Image\AnimationDetector;
 use Contenir\Storage\Image\ImageResizerInterface;
 use Contenir\Storage\ImageMeta;
 use Contenir\Storage\Internal\Warnings;
@@ -72,6 +73,9 @@ use const DIRECTORY_SEPARATOR;
  *
  * Entry::$id is md5(name) so the JS layer's existing delete/rename
  * payloads continue to round-trip without change.
+ *
+ * An animated source gets no variants: resizing would keep one frame at best,
+ * so url() answers null for its variants and callers serve the original.
  *
  * @mago-expect lint:too-many-methods Implements the full StorageInterface plus its path guard; splitting is a follow-up.
  * @mago-expect lint:cyclomatic-complexity Implements the full StorageInterface plus its path guard; splitting is a follow-up.
@@ -154,7 +158,7 @@ final class LocalFilesystem implements StorageInterface, MissingVariantsReporter
             throw NotFoundException::forPath($path);
         }
 
-        return new ImageMeta($info[0], $info[1], $info['mime']);
+        return new ImageMeta($info[0], $info[1], $info['mime'], AnimationDetector::isAnimatedFile($absolute));
     }
 
     #[Override]
@@ -220,7 +224,7 @@ final class LocalFilesystem implements StorageInterface, MissingVariantsReporter
         }
 
         $missing = [];
-        foreach ($this->variants->allowedFor($this->paths, $path) as $variant) {
+        foreach ($this->variantsFor($path) as $variant) {
             $variantRel = $this->variantRelativePath($path, $variant->name);
             if (! is_file($this->resolveAbsolutePath($variantRel))) {
                 $missing[] = $variantRel;
@@ -265,7 +269,7 @@ final class LocalFilesystem implements StorageInterface, MissingVariantsReporter
          * source extension.
          */
         $generated = [];
-        foreach ($this->variants->allowedFor($this->paths, $path) as $variant) {
+        foreach ($this->variantsFor($path) as $variant) {
             $variantRel = $this->variantRelativePath($path, $variant->name);
             $variantAbs = $this->resolveAbsolutePath($variantRel);
             if (is_file($variantAbs)) {
@@ -347,7 +351,7 @@ final class LocalFilesystem implements StorageInterface, MissingVariantsReporter
 
         $relativePath = '' === $directory ? $finalName : "{$directory}/{$finalName}";
 
-        if (null !== $resolved->image) {
+        if (null !== $resolved->image && ! $resolved->image->animated) {
             foreach ($this->variants->allowedFor($this->paths, $relativePath) as $variant) {
                 $this->generateVariant($relativePath, $variant);
             }
@@ -374,31 +378,7 @@ final class LocalFilesystem implements StorageInterface, MissingVariantsReporter
             return $this->buildPublicUrl($path);
         }
 
-        $variantRel = $this->variantRelativePath($path, $variant);
-        $variantAbs = $this->resolveAbsolutePath($variantRel);
-
-        /**
-         * Lazy generation: if the variant hasn't been materialised but the
-         * original is a real image, resize on demand. This covers files that
-         * landed on disk by any route other than store() (legacy data, SCP,
-         * rsync, manual drops). One-time cost per asset; subsequent requests
-         * hit the cached sibling. A resizer failure (corrupt image, missing
-         * ImageMagick, permissions) leaves the variant unmaterialised so the
-         * caller falls back to the original URL.
-         */
-        if (! is_file($variantAbs) && false !== Warnings::suppress(getimagesize(...), $absolute)) {
-            try {
-                $this->generateVariant($path, $this->variants->get($variant));
-            } catch (Throwable) {
-                return null;
-            }
-        }
-
-        if (! is_file($variantAbs)) {
-            return null;
-        }
-
-        return $this->buildPublicUrl($variantRel);
+        return $this->variantUrl($path, $absolute, $variant);
     }
 
     #[Override]
@@ -581,5 +561,60 @@ final class LocalFilesystem implements StorageInterface, MissingVariantsReporter
         $name = basename($relativePath);
         $base = '' === $dir ? '' : "{$dir}/";
         return sprintf('%s%s/%s/%s', $base, self::VARIANT_DIR, $variantName, $name);
+    }
+
+    /**
+     * The variants $path is entitled to: none for an animated source, else
+     * those its `storage.paths` entry owns.
+     *
+     * @return list<Variant>
+     *
+     * @throws InvalidPathException If $path is unsafe.
+     */
+    private function variantsFor(string $path): array
+    {
+        if (AnimationDetector::isAnimatedFile($this->resolveAbsolutePath($path))) {
+            return [];
+        }
+
+        return $this->variants->allowedFor($this->paths, $path);
+    }
+
+    /**
+     * The URL of $variant of the existing file $path, or null when it has none.
+     *
+     * Lazy generation: if the variant hasn't been materialised but the
+     * original is a real image, resize on demand. This covers files that
+     * landed on disk by any route other than store() (legacy data, SCP,
+     * rsync, manual drops). One-time cost per asset; subsequent requests
+     * hit the cached sibling. A resizer failure (corrupt image, missing
+     * ImageMagick, permissions) leaves the variant unmaterialised so the
+     * caller falls back to the original URL. So does an animated source,
+     * which is never resized: a still left over from before is not offered.
+     *
+     * @throws InvalidPathException If the variant path is unsafe.
+     */
+    private function variantUrl(string $path, string $absolute, string $variant): ?string
+    {
+        if (AnimationDetector::isAnimatedFile($absolute)) {
+            return null;
+        }
+
+        $variantRel = $this->variantRelativePath($path, $variant);
+        $variantAbs = $this->resolveAbsolutePath($variantRel);
+
+        if (! is_file($variantAbs) && false !== Warnings::suppress(getimagesize(...), $absolute)) {
+            try {
+                $this->generateVariant($path, $this->variants->get($variant));
+            } catch (Throwable) {
+                return null;
+            }
+        }
+
+        if (! is_file($variantAbs)) {
+            return null;
+        }
+
+        return $this->buildPublicUrl($variantRel);
     }
 }

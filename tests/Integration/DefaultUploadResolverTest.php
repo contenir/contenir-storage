@@ -7,6 +7,7 @@ namespace Contenir\Storage\Tests\Integration;
 use Contenir\Storage\DefaultUploadResolver;
 use Contenir\Storage\Exception\InvalidPathException;
 use Contenir\Storage\Exception\UnsupportedTypeException;
+use Contenir\Storage\Tests\TestAsset\Image\GifFactory;
 use Contenir\Storage\Tests\Trait\TemporaryDirectoryTrait;
 use Contenir\Storage\UploadInput;
 use PHPUnit\Framework\Attributes\Group;
@@ -50,6 +51,16 @@ final class DefaultUploadResolverTest extends TestCase
         static::assertNotNull($resolved->image);
         static::assertSame(40, $resolved->image->width);
         static::assertSame(25, $resolved->image->height);
+    }
+
+    #[Test]
+    public function flagsAnAnimatedUpload(): void
+    {
+        $source = $this->writeFile('spin.bin', GifFactory::bytes(2));
+
+        $resolved = (new DefaultUploadResolver())->resolve(new UploadInput($source, 'spin.gif', null));
+
+        static::assertTrue($resolved->image?->animated);
     }
 
     #[Test]
@@ -126,6 +137,14 @@ final class DefaultUploadResolverTest extends TestCase
         $this->expectException(InvalidPathException::class);
 
         (new DefaultUploadResolver())->resolve(new UploadInput($this->makePng(), '@@@.png', null));
+    }
+
+    #[Test]
+    public function reportsAStillUploadAsNotAnimated(): void
+    {
+        $resolved = (new DefaultUploadResolver())->resolve(new UploadInput($this->makeJpeg(), 'snap.jpg', null));
+
+        static::assertFalse($resolved->image?->animated);
     }
 
     #[Test]

@@ -29,6 +29,24 @@ final class PngFactory
     }
 
     /**
+     * The same black PNG with the `acTL` chunk an APNG declares its frame
+     * count in. Only the declaration is written, so decoders show the still
+     * image; it is enough to tell an animation from a still by its header.
+     */
+    public static function bytesWithAnimationControl(int $width, int $height, int $frames): string
+    {
+        $row = "\0" . str_repeat("\0\0\0", $width);
+
+        return (
+            "\x89PNG\r\n\x1A\n"
+                . self::chunk('IHDR', pack('NNCCCCC', $width, $height, 8, 2, 0, 0, 0))
+                . self::chunk('acTL', pack('NN', $frames, 0))
+                . self::chunk('IDAT', (string) gzcompress(str_repeat($row, $height)))
+                . self::chunk('IEND', '')
+        );
+    }
+
+    /**
      * The same black PNG carrying a tEXt "Comment" chunk, for asserting that
      * metadata is stripped.
      */

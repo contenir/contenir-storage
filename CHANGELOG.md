@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `ImageMeta::$animated` marks a source with more than one frame, and
+  `Image\AnimationDetector` decides it for GIF, APNG and WebP from the
+  container format, without decoding or ImageMagick. `DefaultUploadResolver`,
+  `LocalFilesystem::imageMeta()` and `InMemoryStorage` fill it in; the
+  constructor argument defaults to `false`.
+
+### Changed
+
+- An animated source gets no variants from `LocalFilesystem` or
+  `InMemoryStorage`, so it is served as itself at every size: `store()` and
+  `regenerateMissingVariants()` make none, `missingVariants()` reports none,
+  and `url($path, $variant)` and `thumbnailUrl()` answer null, even when a
+  still from before exists. `S3` and `CloudflareImages` are unchanged.
+
+### Fixed
+
+- `ImageResizer` reads only the first frame of its source. Given an
+  animation, the CLI wrote one numbered file per frame and never the
+  destination, so the resize failed; the imagick extension kept the last
+  frame.
+
 ## [Unreleased] - 2026-10-21
 
 ### Added

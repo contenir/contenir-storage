@@ -8,6 +8,7 @@ use Contenir\Storage\DefaultUploadResolver;
 use Contenir\Storage\Entry;
 use Contenir\Storage\Exception\NotFoundException;
 use Contenir\Storage\Exception\WriteException;
+use Contenir\Storage\Image\AnimationDetector;
 use Contenir\Storage\ImageMeta;
 use Contenir\Storage\Internal\Warnings;
 use Contenir\Storage\ListOptions;
@@ -264,6 +265,9 @@ final class InMemoryStorage implements StorageInterface, MissingVariantsReporter
         if (! $this->isFile($path)) {
             return null;
         }
+        if (null !== $variant && true === ($this->nodes[$path]['image'] ?? null)?->animated) {
+            return null;
+        }
 
         return null === $variant
             ? $this->urlScheme . $path
@@ -342,7 +346,9 @@ final class InMemoryStorage implements StorageInterface, MissingVariantsReporter
             'bytes' => $bytes,
             'mime'  => $mime,
             'mtime' => new DateTimeImmutable(),
-            'image' => null === $width || null === $height ? null : new ImageMeta($width, $height, $mime),
+            'image' => null === $width || null === $height
+                ? null
+                : new ImageMeta($width, $height, $mime, AnimationDetector::isAnimated($bytes)),
         ];
     }
 

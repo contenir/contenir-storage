@@ -6,6 +6,7 @@ namespace Contenir\Storage;
 
 use Contenir\Storage\Exception\InvalidPathException;
 use Contenir\Storage\Exception\UnsupportedTypeException;
+use Contenir\Storage\Image\AnimationDetector;
 use Contenir\Storage\Internal\Warnings;
 use Override;
 
@@ -144,7 +145,7 @@ final class DefaultUploadResolver implements UploadResolverInterface
         if (false !== $size) {
             $mime = strtolower($size['mime']);
 
-            return [$mime, new ImageMeta($size[0], $size[1], $mime)];
+            return [$mime, new ImageMeta($size[0], $size[1], $mime, AnimationDetector::isAnimatedFile($sourcePath))];
         }
 
         $finfo = finfo_open(FILEINFO_MIME_TYPE);
